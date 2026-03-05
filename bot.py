@@ -26,6 +26,7 @@ TAVILY_API_KEY = os.getenv('TAVILY_API_KEY')
 SERPER_API_KEY = os.getenv('SERPER_API_KEY')
 WATCHLIST_CHANNEL_ID = os.getenv('WATCHLIST_CHANNEL_ID')
 ALERT_CHANNEL_ID = os.getenv('ALERT_CHANNEL_ID')
+NEWS_CHANNEL_ID = os.getenv('NEWS_CHANNEL_ID')
 
 # ==========================================
 # 2. PERSIAPAN AI (GROQ) + AUTO MODEL FALLBACK
@@ -36,15 +37,24 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 # Auto-switch jika sisa RPD atau TPM < threshold
 MODEL_CONFIGS = [
     {"name": "llama-3.3-70b-versatile",                    "label": "Llama 3.3 70B ⭐"},
-    {"name": "openai/gpt-oss-120b",                        "label": "GPT OSS 120B 🧠"},
-    {"name": "qwen/qwen3-32b",                             "label": "Qwen3 32B 💎"},
+    {"name": "llama-3.1-8b-instant",                       "label": "Llama 3.1 8B �"},
     {"name": "meta-llama/llama-4-scout-17b-16e-instruct",  "label": "Llama 4 Scout 🚀"},
+    {"name": "qwen/qwen3-32b",                             "label": "Qwen3 32B 💎"},
+    {"name": "openai/gpt-oss-120b",                        "label": "GPT OSS 120B 🧠"},
     {"name": "openai/gpt-oss-20b",                         "label": "GPT OSS 20B ⚡"},
-    {"name": "llama-3.1-8b-instant",                       "label": "Llama 3.1 8B 💨"},
 ]
 
 # Threshold: switch model jika sisa kuota < 20%
 FALLBACK_THRESHOLD = 0.2
+
+# Pengelompokan Model untuk ROUTING
+# !bro akan menggunakan model selain Llama untuk menghemat biaya
+GENERAL_MODELS = [
+    "meta-llama/llama-4-scout-17b-16e-instruct", 
+    "qwen/qwen3-32b", 
+    "openai/gpt-oss-120b", 
+    "openai/gpt-oss-20b"
+]
 
 class ModelManager:
     """
@@ -485,6 +495,7 @@ class SahamManager:
         self.watchlist_cache_time = 0
         self.alerted_stocks = {}
         self.prev_prices = {}
+        self.detail_cache = {}  # { ticker: { 'time': timestamp, 'result': (...) } }
 
     def _fetch_stock_data(self, ticker_code):
         """Fetch data lengkap untuk satu saham."""
@@ -758,25 +769,51 @@ class SahamManager:
         return msg
 
     def get_detail(self, ticker_code):
-        """Feature 2: Detailed stock analysis."""
+        """Feature 2: Detailed stock analysis (Unified 3-Lens)."""
         ticker_code = ticker_code.upper().strip()
+        now_ts = time.time()
+        
+        # 1. Cek Cache (1 jam TTL)
+        if ticker_code in self.detail_cache:
+            cached = self.detail_cache[ticker_code]
+            if now_ts - cached['time'] < 3600:
+                print(f"  ⚡ Using cached detail for {ticker_code}")
+                return cached['result']
+
         data = self._fetch_stock_data(ticker_code)
         if not data: return None
         score, signals = self._calculate_signals(data)
 
-        # Web search news
-        sq = f"saham {ticker_code} {data['name']} analisa rekomendasi {datetime.now(JAKARTA_TZ).strftime('%B %Y')}"
-        search_results, search_provider = self.search_manager.search(sq)
+        # 2. Web search news (Filtered source for quality)
+        sq = f"site:cnbcindonesia.com {ticker_code} {data['name']} analisa berita terbaru {datetime.now(JAKARTA_TZ).strftime('%B %Y')}"
+        search_results, search_provider = self.search_manager.search(sq, max_results=5)
 
-        # AI analysis
-        prompt = f"""Buat analisa RINGKAS saham {ticker_code} dalam 5-7 bullet points.
-Data: Harga Rp {(data.get('current_price') or 0):,.0f}
-Vol: {format_volume(data.get('volume'))} | MCap: {format_rupiah(data.get('market_cap'))} | P/E: {data.get('pe_ratio','N/A')}
-RSI: {data.get('rsi','N/A')} | 52w: Rp {(data.get('fifty_two_week_low') or 0):,.0f}-{(data.get('fifty_two_week_high') or 0):,.0f}
-Analyst: {data.get('recommendation','N/A')} target Rp {(data.get('target_price') or 0):,.0f} ({data.get('analyst_count',0)} analis)
-{f'Berita: {search_results[:1000]}' if search_results else ''}"""
-        ai_text, model_label = self._ai_analysis(prompt, max_tokens=800)
-        return data, score, signals, ai_text, search_provider, model_label
+        # 3. AI analysis (Strict 3-Lens Prompt)
+        prompt = f"""Bertindaklah sebagai Senior Equity Analyst. Analisa saham {ticker_code} ({data['name']}) dengan format 3-Lensa yang ketat.
+
+DATA PASAR:
+- Harga: Rp {(data.get('current_price') or 0):,.0f} | Prev: Rp {(data.get('prev_close') or 0):,.0f}
+- P/E: {data.get('pe_ratio','N/A')}x | PBV: {data.get('pbv_ratio','N/A')}x | ROE: {f"{data.get('roe',0)*100:.1f}%" if data.get('roe') else 'N/A'}
+- RSI: {data.get('rsi','N/A')} | Volume: {format_volume(data.get('volume'))}
+- Konsensus Anais: {data.get('recommendation','N/A')} (Target: Rp {(data.get('target_price') or 0):,.0f})
+
+BERITA TERBARU:
+{search_results[:2000] if search_results else 'Tidak ada berita signifikan.'}
+
+STRUKTUR LAPORAN (WAJIB):
+1. 🏦 **LENSA FUNDAMENTAL**: Evaluasi kesehatan keuangan, valuasi (murah/mahal), dan efisiensi (ROE).
+2. 📈 **LENSA TEKNIKAL**: Baca tren harga, indikator RSI, dan apakah sedang di zona beli/jual.
+3. 🗣️ **LENSA NARASI/SENTIMEN**: Berikan SKOR SENTIMEN (1-10) berdasarkan berita terbaru. Apakah kabarnya organik atau sekadar hype?
+4. 🏁 **VERDICT**: Berikan kesimpulan tegas (STRONG BUY / BUY / HOLD / AVOID) dan 1 kalimat alasan utamanya.
+
+Gunakan gaya bahasa profesional, lugas, dan berikan poin-poin penting saja."""
+
+        ai_text, model_label = self._ai_analysis(prompt, max_tokens=1000)
+        result = (data, score, signals, ai_text, search_provider, model_label)
+        
+        # Simpan ke cache
+        self.detail_cache[ticker_code] = {'time': now_ts, 'result': result}
+        return result
 
     def format_detail_message(self, data, score, signals, ai_text, search_provider, model_label):
         """Format detail analysis untuk Discord."""
@@ -886,6 +923,7 @@ Analyst: {data.get('recommendation','N/A')} target Rp {(data.get('target_price')
                 alerts.append({"data": data, "score": score, "signals": signals})
                 self.alerted_stocks[tc] = time.time()
         return alerts
+
 
 # Inisialisasi Saham Manager
 saham_manager = SahamManager(search_manager, groq_client, model_manager)
@@ -1070,6 +1108,53 @@ async def daily_portfolio_report():
 async def before_daily_report():
     await discord_client.wait_until_ready()
 
+@tasks.loop(minutes=30)
+async def morning_market_briefing():
+    """Background: kirim ringkasan berita market setiap pagi pukul 08:30 WIB."""
+    now = datetime.now(JAKARTA_TZ)
+    # Jalankan hanya di hari kerja, pada jam 08:30 - 09:00 WIB
+    if now.weekday() >= 5 or now.hour != 8 or now.minute < 30: return
+
+    if not NEWS_CHANNEL_ID: return
+    channel = discord_client.get_channel(int(NEWS_CHANNEL_ID))
+    if not channel: return
+
+    print(f"\n📰 [Morning Briefing] Menyiapkan berita pagi...")
+    
+    async with channel.typing():
+        # 1. Cari berita market global & IHSG
+        sq = f"sentimen market global IHSG hari ini {now.strftime('%d %B %Y')}"
+        search_text, provider = search_manager.search(sq, max_results=8)
+        
+        # 2. AI Summarization
+        prompt = f"""Bertindaklah sebagai News Anchor Keuangan. Buat ringkasan "MORNING BRIEFING" untuk trader Indonesia.
+Berita Hari Ini:
+{search_text[:3000] if search_text else 'Belum ada berita signifikan.'}
+
+Gunakan format:
+📌 **MORNING BRIEFING - {now.strftime('%d %b %Y')}** ☕
+━━━━━━━━━━━━━━━━━━━━━
+1. **Global Sentiment**: Bagaimana kondisi bursa AS/Asia semalam?
+2. **IHSG Outlook**: Prediksi pergerakan hari ini.
+3. **Saham Pantauan**: Saham yang berpotensi ramai (base on news).
+4. **Kalender Ekonomi**: Agenda hari ini jika ada.
+
+Gaya bahasa: Semangat, lugas, dan informatif."""
+        
+        # Pakai model terbaik (70B) untuk ringkasan berita
+        ai_msg, model_label = saham_manager._ai_analysis(prompt, max_tokens=1000)
+        
+        header = f"📰 **{now.strftime('%d %B %Y')} - Market Preparation**\n"
+        chunks = split_message(header + ai_msg)
+        for chunk in chunks:
+            await channel.send(chunk)
+            
+    print(f"  ✅ Morning Briefing terkirim ke channel {NEWS_CHANNEL_ID}")
+
+@morning_market_briefing.before_loop
+async def before_morning_briefing():
+    await discord_client.wait_until_ready()
+
 @discord_client.event
 async def on_ready():
     global bot_start_time
@@ -1082,6 +1167,8 @@ async def on_ready():
         watchlist_auto_post.start()
     if not daily_portfolio_report.is_running():
         daily_portfolio_report.start()
+    if not morning_market_briefing.is_running():
+        morning_market_briefing.start()
 
     print(f'Yeay! Bot {discord_client.user} sudah online dan siap digunakan!')
     print(f'Models ({len(MODEL_CONFIGS)}):')
@@ -1109,18 +1196,17 @@ async def on_message(message):
     if message.content.strip() == '!help':
         help_msg = f"🤖 **Daftar Perintah FatihAI**\n"
         help_msg += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-        help_msg += f"💬 **UMUM**\n"
-        help_msg += f"• `!bro [pertanyaan]` : Tanya apa saja ke FatihAI (pakai internet & AI)\n"
-        help_msg += f"• `!status` : Cek kondisi kesehatan & kuota model AI\n"
-        help_msg += f"• `!help` : Lihat daftar perintah ini\n\n"
+        help_msg += f"💬 **CHAT & AI**\n"
+        help_msg += f"• `!bro [tanya]` : Tanya apa saja ke FatihAI (hemat kuota)\n"
+        help_msg += f"• `!status` : Cek kesehatan & kuota model AI\n\n"
         help_msg += f"📈 **SAHAM & PASAR**\n"
-        help_msg += f"• `!saham` : Lihat watchlist saham trending hari ini\n"
-        help_msg += f"• `!saham cari [KODE]` : Analisa mendalam satu kode saham (ex: `!saham cari BBCA`)\n\n"
-        help_msg += f"💰 **PORTOFOLIO SAYA**\n"
+        help_msg += f"• `!saham` : Lihat watchlist trending hari ini\n"
+        help_msg += f"• `!saham cari [KODE]` : Analisa 3-Lensa mendalam (Fundamental, Teknikal, Narasi)\n\n"
+        help_msg += f"💰 **PORTO SAYA**\n"
         help_msg += f"• `!porto` : Cek performa semua saham di porto Boss\n"
-        help_msg += f"• `!porto tambah [KODE] [HARGA]` : Simpan saham ke porto (ex: `!porto tambah BBRI 4500`)\n"
+        help_msg += f"• `!porto tambah [KODE] [HARGA]` : Simpan saham ke porto\n"
         help_msg += f"• `!porto hapus [KODE]` : Hapus saham dari porto Boss\n\n"
-        help_msg += f"-# 💡 *Tips: Gunakan huruf kapital untuk kode saham agar hasil lebih akurat.*"
+        help_msg += f"-# 💡 *Tips: Setiap pagi jam 08:30 WIB cek channel #news-trading untuk Morning Briefing!*"
         await message.reply(help_msg)
         return
 
@@ -1180,11 +1266,24 @@ async def on_message(message):
                 return
             ticker = cmd_parts[2].upper()
             try:
-                price = float(cmd_parts[3].replace(',', ''))
+                # Ambil sisa pesan sebagai harga (antisipasi spasi: Rp 10.000)
+                raw_price = "".join(cmd_parts[3:]).lower().replace('rp', '').replace(' ', '')
+                
+                # Heuristic: Di saham IDX, titik hampir selalu ribuan (10.000)
+                # Jika ada koma, titik fix ribuan (1.234,50)
+                if '.' in raw_price and ',' in raw_price:
+                    raw_price = raw_price.replace('.', '').replace(',', '.')
+                elif '.' in raw_price:
+                    # 10.000 -> 10000. Di IDX tidak ada harga desimal seperti 10.5
+                    raw_price = raw_price.replace('.', '')
+                elif ',' in raw_price:
+                    raw_price = raw_price.replace(',', '.')
+                
+                price = float(raw_price)
                 user_portfolios[user_id][ticker] = price
                 await message.reply(f"✅ Berhasil mencatat **{ticker}** di harga **Rp {price:,.0f}** ke porto Boss.")
             except ValueError:
-                await message.reply("❌ Harga harus berupa angka, Boss!")
+                await message.reply("❌ Harga harus berupa angka, Boss! (Contoh: `10500` atau `10.500`) ")
             return
 
         # 3. !porto hapus [KODE]
@@ -1309,29 +1408,26 @@ async def on_message(message):
         return
 
     # ==========================================
-    # Command: !bro — Tanya FatihAI
+    # Command: !bro — Tanya FatihAI (General Chat)
     # ==========================================
     if message.content.startswith('!bro'):
-
-        # Cek rate limit dulu
-        is_allowed, remaining_seconds = check_rate_limit(message.author.id)
-        if not is_allowed:
-            await message.reply(
-                f"⏳ Kamu sudah mencapai batas {MAX_REQUESTS_PER_MINUTE} request per menit.\n"
-                f"Tunggu **{remaining_seconds} detik** lagi ya sebelum bertanya lagi!"
-            )
+        allowed, retry_after = check_rate_limit(message.author.id)
+        if not allowed:
+            await message.reply(f"⏳ Wait Boss! Tunggu **{retry_after} detik** lagi.")
             return
 
-        pertanyaan = message.content.replace('!bro ', '')
-
-        # Ambil riwayat chat (otomatis reset jika > 5 menit tidak aktif)
-        chat_history = get_chat_history(message.author.id)
-
+        pertanyaan = message.content.replace('!bro ', '').strip()
+        if not pertanyaan: return
+        
         async with message.channel.typing():
             try:
-                # Optimasi search query (tambah tanggal + translate keyword)
+                # Routing: !bro uses GENERAL_MODELS
+                active_pool = [m for m in MODEL_CONFIGS if m["name"] in GENERAL_MODELS]
+                if not active_pool: active_pool = MODEL_CONFIGS
+
+                # Optimasi search query (tambah tanggal)
                 now = datetime.now(JAKARTA_TZ)
-                date_str = now.strftime("%B %d %Y")  # e.g. "March 05 2026"
+                date_str = now.strftime("%B %d %Y")
                 search_query = f"{pertanyaan} {date_str}"
 
                 # Cari via multi-search (Tavily → Serper → DuckDuckGo)
@@ -1339,82 +1435,56 @@ async def on_message(message):
                 search_results, search_tool = search_manager.search(search_query)
 
                 # Bangun system prompt dengan tanggal dan konteks pencarian
-                now = datetime.now(JAKARTA_TZ)
                 date_info = now.strftime("Hari ini adalah %A, %d %B %Y. Waktu sekarang: %H:%M WIB.")
                 system_prompt = FATIH_AI_PERSONA + f"\n📅 {date_info}\n"
                 if search_results:
-                    system_prompt += f"""
---- KONTEKS PENCARIAN WEB via {search_tool} (DATA TERKINI) ---
-WAJIB gunakan data berikut sebagai sumber utama untuk menjawab pertanyaan Boss.
-Jangan abaikan data ini. Jangan buat jawaban sendiri jika data sudah tersedia di bawah.
+                    system_prompt += f"\n--- KONTEKS PENCARIAN WEB via {search_tool} ---\n{search_results[:3000]}\n--- AKHIR DATA PENCARIAN ---\n"
 
-{search_results}
---- AKHIR DATA PENCARIAN ---
-"""
+                chat_history = get_chat_history(message.author.id)
+                messages = [{"role": "system", "content": system_prompt}] + chat_history[-6:] + [{"role": "user", "content": pertanyaan}]
 
-                # Bangun messages untuk Groq
-                messages = [{"role": "system", "content": system_prompt}]
-
-                # Tambahkan riwayat percakapan
-                messages.extend(chat_history)
-
-                # Tambahkan pertanyaan baru
-                messages.append({"role": "user", "content": pertanyaan})
-
-                # Retry dengan fallback jika 429
                 ai_reply = None
                 model_label = None
-                model_name = None
                 total_tokens = 0
-                for model in MODEL_CONFIGS:
+                for model in active_pool:
                     try:
                         raw_response = groq_client.chat.completions.with_raw_response.create(
                             model=model["name"],
                             messages=messages,
                             temperature=0.7,
-                            max_tokens=1500
+                            max_tokens=1000
                         )
                         response = raw_response.parse()
                         ai_reply = response.choices[0].message.content
-                        # Strip Qwen3 <think> tags
                         ai_reply = re.sub(r'<think>.*?</think>', '', ai_reply, flags=re.DOTALL).strip()
+                        
                         total_tokens = response.usage.total_tokens if response.usage else 0  # noqa
-                        model_name = model["name"]
+                        model_manager.update_from_headers(model["name"], raw_response.headers)
                         model_label = model["label"]
-
-                        # Update rate limit data dari Groq headers
-                        model_manager.update_from_headers(model_name, raw_response.headers)
-                        d = model_manager.data[model_name]
+                        d = model_manager.data[model["name"]]
                         print(f"[{model_label}] Tokens: {total_tokens} | User: {message.author} | RPD sisa: {d['rpd_remaining']}/{d['rpd_limit']} | TPM sisa: {d['tpm_remaining']}/{d['tpm_limit']}")
-                        break  # Berhasil, keluar loop
+                        break
                     except Exception as e:
-                        err_str = str(e)
-                        if "429" in err_str or "rate" in err_str.lower() or "limit" in err_str.lower():
-                            print(f"  ⚠️ {model['label']} rate limited, coba model berikutnya...")
-                            continue
-                        raise e  # Error lain, lempar ke except luar
+                        if "429" in str(e): continue
+                        raise e
 
-                if not ai_reply:
-                    await message.reply("⚠️ Semua model AI sedang limit. Coba lagi dalam beberapa menit ya!")
-                    return
-
-                # Simpan percakapan ke memori
-                add_to_memory(message.author.id, pertanyaan, ai_reply)
-
-                # Pecah pesan jika lebih dari 2000 karakter
-                chunks = split_message(ai_reply)
-
-                # Tambahkan footer model + search tool di chunk terakhir
-                search_info = f" | {search_tool}" if search_tool else ""
-                model_footer = f"\n-# 🤖 *{model_label}*{search_info}"
-                chunks[-1] += model_footer
-
-                await message.reply(chunks[0])
-                for chunk in chunks[1:]:
-                    await message.channel.send(chunk)
+                if ai_reply:
+                    add_to_memory(message.author.id, pertanyaan, ai_reply)
+                    chunks = split_message(ai_reply)
+                    
+                    search_info = f" | {search_tool}" if search_tool else ""
+                    model_footer = f"\n\n-# 🤖 *{model_label}*{search_info}"
+                    chunks[-1] += model_footer
+                    
+                    await message.reply(chunks[0])
+                    for i in range(1, len(chunks)): await message.channel.send(chunks[i])
+                else:
+                    await message.reply("❌ Semua model cadangan sedang sibuk, Boss.")
 
             except Exception as e:
-                await message.reply(f"Waduh, botnya lagi pusing nih. Error: {e}")
+                await message.reply(f"❌ AI-nya lagi pusing, Boss: {e}")
+        return
+
 
 # ==========================================
 # 5. NYALAKAN BOT

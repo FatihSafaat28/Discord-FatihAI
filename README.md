@@ -5,12 +5,13 @@ FatihAI adalah asisten Discord bertenaga AI yang dirancang khusus untuk komunita
 ## ✨ Fitur Utama
 
 - **🚀 Multi-Model AI with Auto-Fallback**: Menggunakan model terbaik dari Groq (Llama 3.3 70B, Qwen3, dll.) dengan sistem otomatis beralih ke model cadangan jika kuota limit tercapai.
+- **🔍 3-Lens Analysis (`!saham cari`)**: Analisa mendalam menggabungkan lensa Fundamental, Teknikal, dan Narasi Sentimen (via CNBC Indonesia) dengan fitur _caching_ 1 jam.
+- **📰 Morning Market Briefing**: Bot mengirimkan ringkasan berita pasar global & IHSG setiap jam 08:30 WIB ke channel yang dikonfigurasi.
 - **📈 Analisa Saham IDX Real-time**: Data langsung dari Bursa Efek Indonesia (IDX) via `yfinance`.
-- **🔍 Multi-Search System**: Mencari berita dan informasi terkini menggunakan kombinasi Tavily, Serper (Google Search), dan DuckDuckGo.
 - **💰 Personal Portfolio Tracker**: Catat harga beli saham Boss dan pantau Gain/Loss secara real-time. Tiap user memiliki catatan yang terpisah dan pribadi.
 - **🔔 Smart Signal Scanner**: Memantau pergerakan teknikal (Volume Spike, RSI, MACD) setiap 5 menit. Jika ada saham di porto Boss yang terdeteksi, bot akan mengirimkan DM alert.
 - **📡 Daily Closing Report**: Laporan performa portofolio harian dikirim otomatis ke DM Boss setiap market tutup (16:00 WIB).
-- **🇮🇩 Timezone Aware**: Sistem dikunci menggunakan Waktu Indonesia Barat (WIB / Asia/Jakarta), menjamin akurasi scan market dimanapun bot di-deploy (Railway/Heroku/VPS).
+- **🇮🇩 Timezone Aware**: Sistem dikunci menggunakan Waktu Indonesia Barat (WIB / Asia/Jakarta).
 
 ## 🛠️ Instalasi
 
@@ -52,16 +53,16 @@ python bot.py
 
 ## 🎮 Perintah Bot (Commands)
 
-| Perintah                       | Deskripsi                                                       |
-| ------------------------------ | --------------------------------------------------------------- |
-| `!help`                        | Menampilkan seluruh daftar perintah & bantuan.                  |
-| `!bro [tanya]`                 | Tanya FatihAI tentang topik apa saja (terintegrasi web search). |
-| `!saham`                       | Lihat watchlist saham trending/aktif hari ini.                  |
-| `!saham cari [KODE]`           | Analisa mendalam (teknikal/fundamental) saham tertentu.         |
-| `!porto`                       | Lihat rangkuman Gain/Loss portofolio pribadi Boss.              |
-| `!porto tambah [KODE] [HARGA]` | Masukkan saham ke daftar pantauan portofolio.                   |
-| `!porto hapus [KODE]`          | Hapus saham dari daftar portofolio.                             |
-| `!status`                      | Cek sisa kuota API AI dan Search, serta uptime bot.             |
+| Perintah                       | Deskripsi                                                  |
+| ------------------------------ | ---------------------------------------------------------- |
+| `!help`                        | Menampilkan seluruh daftar perintah & bantuan.             |
+| `!bro [tanya]`                 | Chat santai harian (hemat kuota, terintegrasi web search). |
+| `!saham`                       | Lihat watchlist saham trending/aktif hari ini.             |
+| `!saham cari [KODE]`           | Analisa 3-Lensa mendalam (Teknikal/Fundamental/Narasi).    |
+| `!porto`                       | Lihat rangkuman Gain/Loss portofolio pribadi Boss.         |
+| `!porto tambah [KODE] [HARGA]` | Masukkan saham ke daftar pantauan portofolio.              |
+| `!porto hapus [KODE]`          | Hapus saham dari daftar portofolio.                        |
+| `!status`                      | Cek sisa kuota API AI dan Search, serta uptime bot.        |
 
 ## 🚀 Deployment
 
