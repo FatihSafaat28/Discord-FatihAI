@@ -1155,6 +1155,78 @@ Gaya bahasa: Semangat, lugas, dan informatif."""
 async def before_morning_briefing():
     await discord_client.wait_until_ready()
 
+@tasks.loop(minutes=1)
+async def market_session_alert():
+    """Background: kirim pengumuman pembukaan & penutupan market."""
+    now = datetime.now(JAKARTA_TZ)
+    if now.weekday() >= 5: return
+    
+    # Opening: 09:00 WIB
+    if now.hour == 9 and now.minute == 0:
+        msg = "🔔 **MARKET IS OPEN!** 🔔\nSelamat bertarung Boss! Pantau terus signal di channel ini. 📈"
+        for cid in [ALERT_CHANNEL_ID, WATCHLIST_CHANNEL_ID]:
+            if not cid: continue
+            channel = discord_client.get_channel(int(cid))
+            if channel: await channel.send(msg)
+            
+    # Closing: 16:00 WIB
+    if now.hour == 16 and now.minute == 0:
+        msg = "🏁 **MARKET IS CLOSED!** 🏁\nSesi perdagangan hari ini selesai. Istirahat yang cukup, tunggu laporan harian di DM Boss! ☕"
+        for cid in [ALERT_CHANNEL_ID, WATCHLIST_CHANNEL_ID]:
+            if not cid: continue
+            channel = discord_client.get_channel(int(cid))
+            if channel: await channel.send(msg)
+
+@market_session_alert.before_loop
+async def before_session_alert():
+    await discord_client.wait_until_ready()
+
+@tasks.loop(minutes=30)
+async def evening_market_recap():
+    """Background: kirim ringkasan penutupan market setiap sore pukul 16:30 WIB."""
+    now = datetime.now(JAKARTA_TZ)
+    # Jalankan hanya di hari kerja, pada jam 16:30 - 17:00 WIB
+    if now.weekday() >= 5 or now.hour != 16 or now.minute < 30: return
+
+    if not NEWS_CHANNEL_ID: return
+    channel = discord_client.get_channel(int(NEWS_CHANNEL_ID))
+    if not channel: return
+
+    print(f"\n📰 [Evening Recap] Menyiapkan berita penutupan...")
+    
+    async with channel.typing():
+        # 1. Cari berita penutupan IHSG & sentimen hari ini
+        sq = f"penutupan IHSG statistik bursa berita hari ini {now.strftime('%d %B %Y')}"
+        search_text, provider = search_manager.search(sq, max_results=8)
+        
+        # 2. AI Summarization
+        prompt = f"""Bertindaklah sebagai Senior Market Analyst. Buat ringkasan "EVENING RECAP" untuk penutupan bursa hari ini.
+Berita Penutupan:
+{search_text[:3000] if search_text else 'Belum ada data penutupan signifikan.'}
+
+Gunakan format:
+🏁 **EVENING RECAP - {now.strftime('%d %b %Y')}** 📈
+━━━━━━━━━━━━━━━━━━━━━
+1. **Market Review**: Bagaimana penutupan IHSG hari ini? (Naik/Turun/Level).
+2. **Key Movers**: Saham atau sektor apa yang menggerakkan bursa hari ini?
+3. **Daily Narrative**: Sentimen apa yang mendominasi pasar hari ini?
+4. **Conclusion**: Insight singkat untuk persiapan besok.
+
+Gaya bahasa: Profesional, tajam, dan edukatif."""
+        
+        ai_msg, model_label = saham_manager._ai_analysis(prompt, max_tokens=1000)
+        
+        header = f"📰 **{now.strftime('%d %B %Y')} - Market Recap**\n"
+        chunks = split_message(header + ai_msg)
+        for chunk in chunks:
+            await channel.send(chunk)
+            
+    print(f"  ✅ Evening Recap terkirim ke channel {NEWS_CHANNEL_ID}")
+
+@evening_market_recap.before_loop
+async def before_evening_recap():
+    await discord_client.wait_until_ready()
+
 @discord_client.event
 async def on_ready():
     global bot_start_time
@@ -1169,6 +1241,10 @@ async def on_ready():
         daily_portfolio_report.start()
     if not morning_market_briefing.is_running():
         morning_market_briefing.start()
+    if not evening_market_recap.is_running():
+        evening_market_recap.start()
+    if not market_session_alert.is_running():
+        market_session_alert.start()
 
     print(f'Yeay! Bot {discord_client.user} sudah online dan siap digunakan!')
     print(f'Models ({len(MODEL_CONFIGS)}):')
@@ -1206,7 +1282,7 @@ async def on_message(message):
         help_msg += f"• `!porto` : Cek performa semua saham di porto Boss\n"
         help_msg += f"• `!porto tambah [KODE] [HARGA]` : Simpan saham ke porto\n"
         help_msg += f"• `!porto hapus [KODE]` : Hapus saham dari porto Boss\n\n"
-        help_msg += f"-# 💡 *Tips: Setiap pagi jam 08:30 WIB cek channel #news-trading untuk Morning Briefing!*"
+        help_msg += f"-# 💡 *Tips: Cek channel #news-trading untuk Morning Briefing (08:30) & Evening Recap (16:30)!*"
         await message.reply(help_msg)
         return
 
