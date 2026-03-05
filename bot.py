@@ -8,6 +8,9 @@ import random
 import requests as http_requests
 import yfinance as yf
 from datetime import datetime
+import pytz
+
+JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
 from groq import Groq
 from ddgs import DDGS
 from dotenv import load_dotenv
@@ -652,7 +655,7 @@ class SahamManager:
         prev = data.get('prev_close') or 0
         change_pct = ((price - prev) / prev * 100) if prev else 0
         ce = "🟢" if change_pct >= 0 else "🔴"
-        now = datetime.now()
+        now = datetime.now(JAKARTA_TZ)
         ts = now.strftime("%d %b %Y, %H:%M:%S") + " WIB"
 
         msg = f"{'=' * 30}\n"
@@ -731,7 +734,7 @@ class SahamManager:
 
     def format_watchlist_message(self, data, from_cache):
         """Format watchlist untuk Discord."""
-        now = datetime.now()
+        now = datetime.now(JAKARTA_TZ)
         msg = f"{'=' * 30}\n"
         msg += f"📊 **Watchlist Saham IDX** — {now.strftime('%d %b %Y, %H:%M')} WIB\n"
         msg += f"🔍 AI Research {'(cache)' if from_cache else '(fresh)'}\n"
@@ -756,7 +759,7 @@ class SahamManager:
         score, signals = self._calculate_signals(data)
 
         # Web search news
-        sq = f"saham {ticker_code} {data['name']} analisa rekomendasi {datetime.now().strftime('%B %Y')}"
+        sq = f"saham {ticker_code} {data['name']} analisa rekomendasi {datetime.now(JAKARTA_TZ).strftime('%B %Y')}"
         search_results, search_provider = self.search_manager.search(sq)
 
         # AI analysis
@@ -916,7 +919,7 @@ bot_start_time = time.time()
 @tasks.loop(minutes=SCAN_INTERVAL_MINUTES)
 async def signal_scanner():
     """Background: scan signals setiap 10 menit."""
-    now = datetime.now()
+    now = datetime.now(JAKARTA_TZ)
     if now.weekday() >= 5: return  # Skip weekend
     h, m = now.hour, now.minute
     if not ((h > 9 or (h == 9 and m >= 0)) and (h < 15 or (h == 15 and m <= 30))):
@@ -960,7 +963,7 @@ async def before_signal_scanner():
 @tasks.loop(minutes=WATCHLIST_CACHE_MINUTES)
 async def watchlist_auto_post():
     """Background: post watchlist otomatis setiap 30 menit."""
-    now = datetime.now()
+    now = datetime.now(JAKARTA_TZ)
     if now.weekday() >= 5 or now.hour < 9 or now.hour >= 16: return
     if not WATCHLIST_CHANNEL_ID: return
 
@@ -1141,7 +1144,7 @@ async def on_message(message):
         async with message.channel.typing():
             try:
                 # Optimasi search query (tambah tanggal + translate keyword)
-                now = datetime.now()
+                now = datetime.now(JAKARTA_TZ)
                 date_str = now.strftime("%B %d %Y")  # e.g. "March 05 2026"
                 search_query = f"{pertanyaan} {date_str}"
 
@@ -1150,7 +1153,7 @@ async def on_message(message):
                 search_results, search_tool = search_manager.search(search_query)
 
                 # Bangun system prompt dengan tanggal dan konteks pencarian
-                now = datetime.now()
+                now = datetime.now(JAKARTA_TZ)
                 date_info = now.strftime("Hari ini adalah %A, %d %B %Y. Waktu sekarang: %H:%M WIB.")
                 system_prompt = FATIH_AI_PERSONA + f"\n📅 {date_info}\n"
                 if search_results:
