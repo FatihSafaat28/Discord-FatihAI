@@ -4,6 +4,7 @@ import os
 import json
 import asyncio
 import re
+import random
 import requests as http_requests
 import yfinance as yf
 from datetime import datetime
@@ -402,13 +403,25 @@ search_manager = SearchManager()
 SCAN_INTERVAL_MINUTES = 5
 WATCHLIST_CACHE_MINUTES = 30
 
-# Daftar saham IDX top untuk scanning
-IDX_TOP_STOCKS = [
-    "BBCA", "BBRI", "BMRI", "BBNI",
-    "TLKM", "ASII", "UNVR", "ICBP",
-    "GOTO", "BREN", "AMMN", "ADRO",
-    "PANI", "CPIN", "MDKA", "INDF",
-    "SMGR", "KLBF", "EXCL", "ANTM",
+# 20 Saham CORE (selalu di-scan)
+IDX_CORE_STOCKS = [
+    "BBCA", "BBRI", "BMRI", "BBNI",  # Perbankan
+    "TLKM", "ASII", "UNVR", "ICBP",  # Blue chip
+    "GOTO", "BREN", "AMMN", "ADRO",  # Trending
+    "PANI", "CPIN", "MDKA", "INDF",  # LQ45
+    "SMGR", "KLBF", "EXCL", "ANTM",  # Industri
+]
+
+# Pool LQ45 + saham populer untuk padding dinamis
+IDX_LQ45_POOL = [
+    "ACES", "AKRA", "AMRT", "ARTO", "BBTN",
+    "BFIN", "BRPT", "BUKA", "CTRA", "EMTK",
+    "ESSA", "GGRM", "HRUM", "INKP", "INTP",
+    "ITMG", "JPFA", "JSMR", "MAPI", "MBMA",
+    "MEDC", "MIKA", "MNCN", "PGEO", "PGAS",
+    "PTBA", "PTPP", "SCMA", "SIDO", "SRTG",
+    "TBIG", "TINS", "TKIM", "TPIA", "UNTR",
+    "WIKA", "WMUU", "WSKT",
 ]
 
 def format_rupiah(value):
@@ -819,10 +832,33 @@ Analyst: {data.get('recommendation','N/A')} target Rp {(data.get('target_price')
         msg += f"-# 🤖 *{model_label}*{si} | yfinance 📊"
         return msg
 
+    def _build_scan_pool(self, max_size=50):
+        """Build dynamic pool: 20 core + watchlist trending + random LQ45."""
+        pool = list(IDX_CORE_STOCKS)  # 20 core
+        seen = set(pool)
+
+        # Tambah dari watchlist cache (saham trending)
+        if self.watchlist_cache:
+            for item in self.watchlist_cache:
+                tc = item.get('ticker', '')
+                if tc and tc not in seen:
+                    pool.append(tc)
+                    seen.add(tc)
+
+        # Padding dari LQ45 pool (random)
+        remaining = max_size - len(pool)
+        if remaining > 0:
+            available = [s for s in IDX_LQ45_POOL if s not in seen]
+            random.shuffle(available)
+            pool.extend(available[:remaining])
+
+        return pool[:max_size]
+
     def scan_signals(self):
-        """Feature 3: Scan semua saham, return list alert."""
+        """Feature 3: Scan dinamis 50 saham, return list alert."""
+        scan_pool = self._build_scan_pool(50)
         alerts = []
-        for tc in IDX_TOP_STOCKS:
+        for tc in scan_pool:
             data = self._fetch_stock_data(tc)
             if not data: continue
             score, signals = self._calculate_signals(data)
