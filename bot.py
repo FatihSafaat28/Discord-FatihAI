@@ -684,7 +684,7 @@ class SahamManager:
         search_results, _ = self.search_manager.search(query)
 
         # AI extract tickers
-        tickers = IDX_TOP_STOCKS[:]
+        tickers = IDX_CORE_STOCKS[:]
         if search_results:
             try:
                 ai_text, _ = self._ai_analysis(
@@ -697,7 +697,7 @@ class SahamManager:
                     if extracted:
                         seen = set()
                         merged = []
-                        for t in extracted + IDX_TOP_STOCKS:
+                        for t in extracted + IDX_CORE_STOCKS:
                             tu = t.upper().strip()
                             if tu not in seen and len(tu) == 4:
                                 seen.add(tu)
@@ -923,7 +923,7 @@ async def signal_scanner():
         return  # Di luar jam market
 
     if not ALERT_CHANNEL_ID: return
-    print(f"\n🔍 [Signal Scanner] Scanning {len(IDX_TOP_STOCKS)} saham...")
+    print(f"\n🔍 [Signal Scanner] Scanning {len(IDX_CORE_STOCKS)} saham...")
     scan_start = time.time()
     alerts = await asyncio.to_thread(saham_manager.scan_signals)
     scan_time = time.time() - scan_start
