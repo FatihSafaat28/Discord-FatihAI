@@ -866,7 +866,7 @@ Analyst: {data.get('recommendation','N/A')} target Rp {(data.get('target_price')
             if not data: continue
             score, signals = self._calculate_signals(data)
             self.prev_prices[tc] = data.get('current_price')
-            if score >= 3:
+            if score >= 2:
                 last = self.alerted_stocks.get(tc, 0)
                 if time.time() - last < 3600:
                     print(f"  ⏳ {tc} cooldown, skip")
