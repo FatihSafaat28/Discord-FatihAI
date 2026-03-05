@@ -219,6 +219,12 @@ def add_to_memory(user_id, user_message, ai_response):
         memory["history"] = memory["history"][-6:]
 
 # ==========================================
+# PORTFOLIO SYSTEM (Local Memory)
+# ==========================================
+# Format: { user_id: { "TICKER": buy_price, ... } }
+user_portfolios = {}
+
+# ==========================================
 # MULTI-SEARCH SYSTEM (Tavily → Serper → DuckDuckGo)
 # ==========================================
 class SearchManager:
@@ -835,10 +841,16 @@ Analyst: {data.get('recommendation','N/A')} target Rp {(data.get('target_price')
         msg += f"-# 🤖 *{model_label}*{si} | yfinance 📊"
         return msg
 
-    def _build_scan_pool(self, max_size=50):
-        """Build dynamic pool: 20 core + watchlist trending + random LQ45."""
-        pool = list(IDX_CORE_STOCKS)  # 20 core
+    def _build_scan_pool(self, max_size=50, user_tickers=None):
+        """Build dynamic pool: user porto (priority) + 20 core + trending."""
+        pool = list(user_tickers) if user_tickers else []
         seen = set(pool)
+
+        # Tambah core stocks
+        for tc in IDX_CORE_STOCKS:
+            if tc not in seen:
+                pool.append(tc)
+                seen.add(tc)
 
         # Tambah dari watchlist cache (saham trending)
         if self.watchlist_cache:
@@ -857,9 +869,9 @@ Analyst: {data.get('recommendation','N/A')} target Rp {(data.get('target_price')
 
         return pool[:max_size]
 
-    def scan_signals(self):
-        """Feature 3: Scan dinamis 50 saham, return list alert."""
-        scan_pool = self._build_scan_pool(50)
+    def scan_signals(self, user_tickers=None):
+        """Feature 3: Scan dinamis saham (porto user + core + trending), return list alert."""
+        scan_pool = self._build_scan_pool(50, user_tickers)
         alerts = []
         for tc in scan_pool:
             data = self._fetch_stock_data(tc)
@@ -927,8 +939,14 @@ async def signal_scanner():
 
     if not ALERT_CHANNEL_ID: return
     scan_start = time.time()
-    alerts = await asyncio.to_thread(saham_manager.scan_signals)
-    scan_pool_size = len(saham_manager._build_scan_pool(50))
+    
+    # Kumpulkan semua ticker unik dari portofolio semua user
+    user_tickers = set()
+    for portfolio in user_portfolios.values():
+        user_tickers.update(portfolio.keys())
+    
+    alerts = await asyncio.to_thread(saham_manager.scan_signals, list(user_tickers))
+    scan_pool_size = len(saham_manager._build_scan_pool(50, list(user_tickers)))
     print(f"\n🔍 [Signal Scanner] Scanning {scan_pool_size} saham...")
     scan_time = time.time() - scan_start
     print(f"  ⏱️ Scan selesai dalam {scan_time:.1f}s | {len(alerts)} alert")
@@ -954,6 +972,25 @@ Signal: {', '.join([s for s in signals if s.startswith('✅')])}"""
         chunks = split_message(msg)
         for chunk in chunks:
             await channel.send(chunk)
+        
+        # --- INTEGRASI PORTOFOLIO (DM ALERT) ---
+        ticker = data['ticker']
+        for user_id, portfolio in user_portfolios.items():
+            if ticker in portfolio:
+                try:
+                    user = await discord_client.fetch_user(user_id)
+                    if user:
+                        dm_msg = f"❗ **PORTFOLIO ALERT!** ❗\n"
+                        dm_msg += f"Saham **{ticker}** di portofolio Boss terdeteksi signal!\n\n"
+                        dm_msg += msg # Menggunakan pesan alert yang sama
+                        dm_chunks = split_message(dm_msg)
+                        for dm_chunk in dm_chunks:
+                            await user.send(dm_chunk)
+                        print(f"  📩 DM Alert terkirim ke {user.name} untuk {ticker}")
+                except Exception as e:
+                    print(f"  ❌ Gagal kirim DM alert ke {user_id}: {e}")
+        # ----------------------------------------
+        
         print(f"  🔔 Alert: {data['ticker']} (skor {score})")
 
 @signal_scanner.before_loop
@@ -983,6 +1020,56 @@ async def watchlist_auto_post():
 async def before_watchlist():
     await discord_client.wait_until_ready()
 
+@tasks.loop(minutes=30)
+async def daily_portfolio_report():
+    """Background: kirim laporan harian portofolio ke DM user saat market tutup."""
+    now = datetime.now(JAKARTA_TZ)
+    # Jalankan hanya di hari kerja, pada jam 16:00 - 16:30 WIB
+    if now.weekday() >= 5 or now.hour != 16: return
+
+    print(f"\n📩 [Daily Report] Mengirim laporan harian ke {len(user_portfolios)} user...")
+    
+    for user_id, portfolio in user_portfolios.items():
+        if not portfolio: continue
+        
+        try:
+            user = await discord_client.fetch_user(user_id)
+            if not user: continue
+
+            msg = f"🔔 **Laporan Penutupan Market Boss {user.name}!**\n"
+            msg += f"📅 {now.strftime('%d %b %Y')}\n"
+            msg += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            total_current = 0
+            total_buy = 0
+            
+            for ticker, buy_price in portfolio.items():
+                try:
+                    t = yf.Ticker(f"{ticker}.JK")
+                    cur_price = t.info.get('currentPrice') or t.info.get('regularMarketPrice')
+                    if cur_price:
+                        diff = cur_price - buy_price
+                        pct = (diff / buy_price) * 100
+                        e = "🟢" if pct >= 0 else "🔴"
+                        msg += f"{e} **{ticker}**: Rp {cur_price:,.0f} ({pct:+.2f}%)\n"
+                        total_current += cur_price
+                        total_buy += buy_price
+                except: continue
+            
+            if total_buy > 0:
+                total_pct = ((total_current - total_buy) / total_buy) * 100
+                msg += f"\n📊 **Total Performa: {total_pct:+.2f}%**\n"
+            
+            msg += f"\n-# 🤖 *FatihAI Daily Portfolio Report*"
+            await user.send(msg)
+            print(f"  ✅ Report terkirim ke {user.name}")
+        except Exception as e:
+            print(f"  ❌ Gagal kirim report ke user {user_id}: {e}")
+
+@daily_portfolio_report.before_loop
+async def before_daily_report():
+    await discord_client.wait_until_ready()
+
 @discord_client.event
 async def on_ready():
     global bot_start_time
@@ -993,6 +1080,8 @@ async def on_ready():
         signal_scanner.start()
     if not watchlist_auto_post.is_running():
         watchlist_auto_post.start()
+    if not daily_portfolio_report.is_running():
+        daily_portfolio_report.start()
 
     print(f'Yeay! Bot {discord_client.user} sudah online dan siap digunakan!')
     print(f'Models ({len(MODEL_CONFIGS)}):')
@@ -1013,6 +1102,103 @@ async def on_ready():
 async def on_message(message):
     if message.author == discord_client.user:
         return
+
+    # ==========================================
+    # Command: !help — Daftar Perintah
+    # ==========================================
+    if message.content.strip() == '!help':
+        help_msg = f"🤖 **Daftar Perintah FatihAI**\n"
+        help_msg += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        help_msg += f"💬 **UMUM**\n"
+        help_msg += f"• `!bro [pertanyaan]` : Tanya apa saja ke FatihAI (pakai internet & AI)\n"
+        help_msg += f"• `!status` : Cek kondisi kesehatan & kuota model AI\n"
+        help_msg += f"• `!help` : Lihat daftar perintah ini\n\n"
+        help_msg += f"📈 **SAHAM & PASAR**\n"
+        help_msg += f"• `!saham` : Lihat watchlist saham trending hari ini\n"
+        help_msg += f"• `!saham cari [KODE]` : Analisa mendalam satu kode saham (ex: `!saham cari BBCA`)\n\n"
+        help_msg += f"💰 **PORTOFOLIO SAYA**\n"
+        help_msg += f"• `!porto` : Cek performa semua saham di porto Boss\n"
+        help_msg += f"• `!porto tambah [KODE] [HARGA]` : Simpan saham ke porto (ex: `!porto tambah BBRI 4500`)\n"
+        help_msg += f"• `!porto hapus [KODE]` : Hapus saham dari porto Boss\n\n"
+        help_msg += f"-# 💡 *Tips: Gunakan huruf kapital untuk kode saham agar hasil lebih akurat.*"
+        await message.reply(help_msg)
+        return
+
+    # ==========================================
+    # Command: !porto — Kelola Portofolio
+    # ==========================================
+    if message.content.startswith('!porto'):
+        user_id = message.author.id
+        if user_id not in user_portfolios:
+            user_portfolios[user_id] = {}
+
+        cmd_parts = message.content.strip().split()
+        
+        # 1. !porto (List Summary)
+        if len(cmd_parts) == 1:
+            portfolio = user_portfolios[user_id]
+            if not portfolio:
+                await message.reply("📋 Portofolio Boss masih kosong. Tambahkan saham pakai `!porto tambah [KODE] [HARGA]`")
+                return
+            
+            async with message.channel.typing():
+                msg = f"📋 **Portofolio Boss {message.author.name}**\n"
+                msg += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                total_current = 0
+                total_buy = 0
+                
+                for ticker, buy_price in portfolio.items():
+                    try:
+                        t = yf.Ticker(f"{ticker}.JK")
+                        cur_price = t.info.get('currentPrice') or t.info.get('regularMarketPrice')
+                        if cur_price:
+                            diff = cur_price - buy_price
+                            pct = (diff / buy_price) * 100
+                            e = "🟢" if pct >= 0 else "🔴"
+                            msg += f"{e} **{ticker}**\n"
+                            msg += f"   Avg: Rp {buy_price:,.0f} → Now: Rp {cur_price:,.0f} (**{pct:+.2f}%**)\n\n"
+                            total_current += cur_price
+                            total_buy += buy_price
+                        else:
+                            msg += f"⚪ **{ticker}**\n   Avg: Rp {buy_price:,.0f} (Data tidak tersedia)\n\n"
+                    except:
+                        msg += f"⚠️ **{ticker}** (Gagal fetch data)\n\n"
+                
+                if total_buy > 0:
+                    total_pct = ((total_current - total_buy) / total_buy) * 100
+                    indicator = "🚀 CUAN BANGET" if total_pct > 5 else "✅ UNTUNG" if total_pct > 0 else "🔻 BONCOS" if total_pct < -5 else "⚠️ MERAH"
+                    msg += f"📊 **ESTIMASI TOTAL G/L: {total_pct:+.2f}%** — *{indicator}*\n"
+                
+                msg += f"\n-# 🤖 *FatihAI Portfolio Tracker*"
+                await message.reply(msg)
+            return
+
+        # 2. !porto tambah [KODE] [HARGA]
+        if cmd_parts[1] == 'tambah':
+            if len(cmd_parts) < 4:
+                await message.reply("💡 Cara pakai: `!porto tambah BBCA 10500`")
+                return
+            ticker = cmd_parts[2].upper()
+            try:
+                price = float(cmd_parts[3].replace(',', ''))
+                user_portfolios[user_id][ticker] = price
+                await message.reply(f"✅ Berhasil mencatat **{ticker}** di harga **Rp {price:,.0f}** ke porto Boss.")
+            except ValueError:
+                await message.reply("❌ Harga harus berupa angka, Boss!")
+            return
+
+        # 3. !porto hapus [KODE]
+        if cmd_parts[1] == 'hapus':
+            if len(cmd_parts) < 3:
+                await message.reply("💡 Cara pakai: `!porto hapus BBCA`")
+                return
+            ticker = cmd_parts[2].upper()
+            if ticker in user_portfolios[user_id]:
+                del user_portfolios[user_id][ticker]
+                await message.reply(f"🗑️ **{ticker}** sudah dihapus dari portofolio Boss.")
+            else:
+                await message.reply(f"❌ Saham **{ticker}** tidak ada di porto Boss.")
+            return
 
     # ==========================================
     # Command: !saham — Watchlist & Analisa Saham
