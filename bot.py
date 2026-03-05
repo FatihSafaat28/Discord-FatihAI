@@ -923,9 +923,10 @@ async def signal_scanner():
         return  # Di luar jam market
 
     if not ALERT_CHANNEL_ID: return
-    print(f"\n🔍 [Signal Scanner] Scanning {len(IDX_CORE_STOCKS)} saham...")
     scan_start = time.time()
     alerts = await asyncio.to_thread(saham_manager.scan_signals)
+    scan_pool_size = len(saham_manager._build_scan_pool(50))
+    print(f"\n🔍 [Signal Scanner] Scanning {scan_pool_size} saham...")
     scan_time = time.time() - scan_start
     print(f"  ⏱️ Scan selesai dalam {scan_time:.1f}s | {len(alerts)} alert")
 
