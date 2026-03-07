@@ -29,12 +29,23 @@ ALERT_CHANNEL_ID = os.getenv('ALERT_CHANNEL_ID')
 NEWS_CHANNEL_ID = os.getenv('NEWS_CHANNEL_ID')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
+# Validasi ENV (Penting untuk Railway)
+REQUIRED_ENVS = [
+    'GROQ_API_KEY', 'DISCORD_TOKEN', 'TAVILY_API_KEY', 'SERPER_API_KEY',
+    'WATCHLIST_CHANNEL_ID', 'ALERT_CHANNEL_ID', 'NEWS_CHANNEL_ID', 'GEMINI_API_KEY'
+]
+missing = [env for env in REQUIRED_ENVS if not os.getenv(env)]
+if missing:
+    print(f"❌ ERROR: Missing environment variables: {', '.join(missing)}")
+    print("💡 Pastikan semua variabel di atas sudah diset di Railway Dashboard!")
+    # JANGAN keluar, biarkan bot coba jalan tapi mungkin akan error di fitur spesifik
+    # Agar bot tidak crash loop di Railway
+
 # ==========================================
 # 2. PERSIAPAN AI (GROQ) + AUTO MODEL FALLBACK
 # ==========================================
 groq_client = Groq(api_key=GROQ_API_KEY)
-# Inisialisasi Gemini
-gemini_manager = GeminiManager(api_key=GEMINI_API_KEY)
+# GeminiManager diinisialisasi setelah class definition di bawah
 
 # Daftar model — urutan = prioritas fallback (dari terbaik ke paling hemat)
 # Auto-switch jika sisa RPD atau TPM < threshold
@@ -165,8 +176,9 @@ class ModelManager:
         # Semua mendekati limit → pakai fallback
         return self.models[-1]
 
-# Inisialisasi Model Manager
+# Inisialisasi Manager
 model_manager = ModelManager(MODEL_CONFIGS)
+gemini_manager = GeminiManager(api_key=GEMINI_API_KEY)
 
 # ==========================================
 # PERSONA FATIH AI
