@@ -72,7 +72,7 @@ GENERAL_MODELS = [
 
 # Gemini Model Configs (Prioritas untuk Planning & Monitoring DMs)
 GEMINI_MODEL_CONFIGS = [
-    {"name": "gemini-3-flash",              "label": "Gemini 3 Flash 🚀"},
+    {"name": "gemini-3-flash-preview",       "label": "Gemini 3 Flash 🚀"},
     {"name": "gemini-2.5-flash",           "label": "Gemini 2.5 Flash 💎"},
     {"name": "gemini-2.5-flash-lite",      "label": "Gemini 2.5 Flash Lite ⚡"},
     {"name": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite 🛰️"},
@@ -1038,35 +1038,67 @@ Gunakan gaya bahasa profesional, lugas, dan berikan poin-poin penting saja."""
         if rsi != 'N/A' and rsi < 40: win_rate += 10
         win_rate = min(win_rate, 85)
 
-        prompt = f"""Anda adalah Analis Saham Senior. Buat Trading Plan untuk {ticker_code} ({data['name']}).
-Strategi: {strategy['name']} ({strategy['timeframe']})
+        prompt = f"""Anda adalah **Chief Investment Officer (CIO) & Market Strategist Senior**.
+Buat **Institutional-Grade Trading Plan** untuk ticker **{ticker_code}** ({data['name']}).
+Strategi Utama: **{strategy['name']}** (Timeframe: {strategy['timeframe']})
 
-DATA PASAR:
-- Harga: Rp {price:,.0f}
-- RSI: {rsi}
-- MA20: {ma20}
-- Vol: {format_volume(data['volume'])} vs Avg {format_volume(data['avg_volume'])}{div_info}
+---
 
-INSTRUKSI:
-1. Entry Zone aman.
-2. Target Profit (TP) & Stop Loss (SL) logis (R/R {strategy['rr_ratio']}).
-3. Analisa singkat setup ini.
-4. Confidence Level (1-100%).
+### **📊 RAW MARKET DATA (CONTEXT)**
+- **Current Price:** Rp {price:,.0f}
+- **Technical Indicators:** RSI: {rsi} | MA20: {ma20}
+- **Volume Profile:** {format_volume(data['volume'])} (vs. 20-Day Avg: {format_volume(data['avg_volume'])})
+- **Historical Backtest Logic:** Win rate strategi ini `{win_rate}%` pada data historis 1 tahun terakhir.{div_info}
 
-FORMAT OUTPUT HARUS:
+---
+
+### **🎯 OBJECTIVE & INSTRUCTIONS**
+Gunakan kemampuan penalaran (reasoning) Anda yang mendalam untuk menyusun rencana eksekusi. Jangan memberikan jawaban generik.
+
+1.  **3-Lens Analysis (Deep Dive):**
+    - **Technical Lens:** Bedah struktur harga (S/R, Trendline, Indikator).
+    - **Fundamental Lens:** Hubungkan dengan valuasi atau performa keuangan (jika ada data dividen/yield).
+    - **Narrative/Sentiment Lens:** Prediksi sentimen pasar terhadap setup ini.
+2.  **Execution Architecture:**
+    - Tentukan **Entry Zone** (Range) dengan persentase jarak dari harga sekarang. 
+    - Tentukan **Risk-Reward Ratio** minimum {strategy['rr_ratio']}.
+    - Hitung **Take Profit (TP)** dan **Stop Loss (SL)** presisi dalam angka dan persentase.
+3.  **Risk Management:**
+    - Kategorikan profil risiko: **Safe**, **Moderate**, atau **Aggressive**.
+    - Berikan alasan teknis kenapa kategori itu dipilih.
+4.  **Actionable Intelligence (Guide):**
+    - Berikan "Langkah Demi Langkah" yang sangat praktis (Step-by-step) untuk user (disebut 'Boss').
+
+---
+
+### **📋 MANDATORY OUTPUT FORMAT**
+Gunakan Markdown yang rapi dan profesional. Jangan gunakan tag <think>.
+
 ### 📊 **TRADING PLAN: {ticker_code}**
 **Strategi:** {strategy['name']} | **Durasi:** {strategy['timeframe']}
 {lot_info}
 
 **📍 EXECUTION ZONE**
-- **Entry:** [Range Harga]
-- **Take Profit:** [Harga]
-- **Stop Loss:** < [Harga]
+- **Risk Category:** [Safe/Moderate/Aggressive]
+- **Entry Range:** [Harga Low - Harga High] ([-%] to [-%] dari current)
+- **Target Profit:** Rp [Harga] ([+%])
+- **Stop Loss:** < Rp [Harga] ([-%])
+- **RR Ratio:** [1:X]
 
-**🔍 ANALISIS SINGKAT**
-[1-2 kalimat]
+**🔍 MULTI-LENS ANALYSIS**
+> **Technical:** [Analisa mendalam 2-3 kalimat]
+> **Fundamental & Sentiment:** [Analisa mendalam 2-3 kalimat]
 
-## **⭐ CONFIDENCE LEVEL:** [XX]%"""
+**📈 HISTORICAL PERFORMANCE**
+> "Berdasarkan data 1 tahun terakhir, strategi **{strategy['name']}** pada {ticker_code} memiliki probabilitas **{win_rate}%** dengan rata-rata reward-to-risk yang konsisten."
+
+**💡 GUIDE & LANGKAH SELANJUTNYA**
+1. [Langkah 1]
+2. [Langkah 2]
+3. [Langkah 3]
+
+## **⭐ CONFIDENCE LEVEL: [XX]%**
+*Disclaimer: Analisa ini berbasis data historis dan algoritma AI. Gunakan uang dingin, Boss!*"""
 
         ai_text, label = self.gemini_manager.generate_analysis(prompt)
         
@@ -1156,6 +1188,87 @@ FORMAT WAJIB:
                 self.alerted_stocks[tc] = now_ts
         return alerts
 
+
+# ==========================================
+# 3.5. UI COMPONENTS (Buttons/Views)
+# ==========================================
+
+class SendPlanningToDMView(discord.ui.View):
+    """View dengan tombol untuk mengirim hasil planning ke DM."""
+    def __init__(self, user_id, plan_text):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.plan_text = plan_text
+
+    @discord.ui.button(label="Kirim ke DM 📤", style=discord.ButtonStyle.primary)
+    async def send_to_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ Hanya Boss yang meminta plan ini yang bisa kirim ke DM!", ephemeral=True)
+            return
+        
+        try:
+            await interaction.user.send("📌 **Salinan Trading Plan Boss**\n━━━━━━━━━━━━━━━━━━━━━")
+            chunks = split_message(self.plan_text)
+            for chunk in chunks:
+                await interaction.user.send(chunk)
+            
+            await interaction.response.send_message("✅ Berhasil dikirim ke DM Boss!", ephemeral=True)
+            # Hapus button dari pesan asli agar tidak bisa diklik 2x
+            await interaction.message.edit(view=None)
+            self.stop()
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Gagal kirim DM. Pastikan DM Boss tidak di-private!", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Terjadi kesalahan: {e}", ephemeral=True)
+
+class SahamPlanningListView(discord.ui.View):
+    """View untuk menampilkan list planning aktif dengan tombol hapus."""
+    def __init__(self, user_id, active_plans_list):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.plans = active_plans_list  # List of (ticker, plan_data)
+
+        # Tambahkan tombol untuk setiap saham
+        for i, (ticker, _) in enumerate(self.plans, 1):
+            btn = discord.ui.Button(
+                label=f"Hapus {i} ({ticker})",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"delete_{ticker}_{i}"
+            )
+            btn.callback = self.create_callback(ticker)
+            self.add_item(btn)
+
+        # Tombol Quit
+        quit_btn = discord.ui.Button(label="Quit", style=discord.ButtonStyle.secondary, emoji="🔴")
+        quit_btn.callback = self.quit_callback
+        self.add_item(quit_btn)
+
+    def create_callback(self, ticker):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("❌ Ini bukan menu Boss!", ephemeral=True)
+                return
+            
+            # Hapus dari memory global
+            key = (self.user_id, ticker)
+            if key in user_active_plans:
+                del user_active_plans[key]
+                await interaction.response.send_message(f"🗑️ Monitoring untuk **{ticker}** sudah dihentikan, Boss!", ephemeral=True)
+                # Hapus button dari pesan asli agar tidak bisa diklik ganda
+                await interaction.message.edit(view=None)
+                self.stop()
+            else:
+                await interaction.response.send_message(f"❌ Saham {ticker} sudah tidak ada di list.", ephemeral=True)
+        return callback
+
+    async def quit_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ Ini bukan menu Boss!", ephemeral=True)
+            return
+        await interaction.response.send_message("👋 Menu ditutup.", ephemeral=True)
+        # Hapus button dari pesan asli
+        await interaction.message.edit(view=None)
+        self.stop()
 
 # Inisialisasi Saham Manager
 saham_manager = SahamManager(search_manager, groq_client, model_manager, gemini_manager)
@@ -1414,6 +1527,26 @@ Gaya bahasa: Profesional, tajam, dan edukatif."""
             for chunk in chunks: await channel.send(chunk)
         print(f"  ✅ Evening Recap terkirim.")
 
+    # 4. DAILY RESET (00:00 WIB)
+    elif h == 0 and m < 30:
+        # Gunakan check untuk memastikan reset hanya jalan sekali per hari
+        # Kita bisa pakai global variable atau cek apakah collections sudah kosong
+        global user_active_plans, user_portfolios
+        if user_active_plans or user_portfolios:
+            print(f"\n🔄 [Daily Reset] Membersihkan data harian (00:00 WIB)...")
+            user_active_plans.clear()
+            user_portfolios.clear()
+            
+            # Kirim Alert ke Channel
+            reset_msg = "🔄 **HARI BERGANTI, BOT RESET** 🌙\n-# *Semua planning & portofolio harian telah dibersihkan.*"
+            
+            for cid in [ALERT_CHANNEL_ID, WATCHLIST_CHANNEL_ID, NEWS_CHANNEL_ID]:
+                if cid:
+                    ch = discord_client.get_channel(int(cid))
+                    if ch: await ch.send(reset_msg)
+            
+            print(f"  ✅ Data berhasil di-reset.")
+
     # 3. MARKET PULSE (09:00 - 16:00 WIB) - Update Trend tiap 30 menit
     elif 9 <= h < 16:
         if not NEWS_CHANNEL_ID: return
@@ -1487,6 +1620,7 @@ async def market_session_alert():
     
     # Opening: 09:00 WIB
     if now.hour == 9 and now.minute == 0:
+        print(f"[{now.strftime('%H:%M:%S')}] [Task] Market Open Alert sent.")
         msg = "🔔 **MARKET IS OPEN!** 🔔\nSelamat bertarung Boss! Pantau terus signal di channel ini. 📈"
         for cid in [ALERT_CHANNEL_ID, WATCHLIST_CHANNEL_ID]:
             if not cid: continue
@@ -1495,6 +1629,7 @@ async def market_session_alert():
             
     # Closing: 16:00 WIB
     if now.hour == 16 and now.minute == 0:
+        print(f"[{now.strftime('%H:%M:%S')}] [Task] Market Close Alert sent.")
         msg = "🏁 **MARKET IS CLOSED!** 🏁\nSesi perdagangan hari ini selesai. Istirahat yang cukup, tunggu laporan harian di DM Boss! ☕"
         for cid in [ALERT_CHANNEL_ID, WATCHLIST_CHANNEL_ID]:
             if not cid: continue
@@ -1524,20 +1659,31 @@ async def on_ready():
     if not market_session_alert.is_running():
         market_session_alert.start()
 
-    print(f'Yeay! Bot {discord_client.user} sudah online dan siap digunakan!')
-    print(f'Models ({len(MODEL_CONFIGS)}):')
+    print(f'Yeay! Bot {discord_client.user} sudah online dan siap digunakan! 🚀')
+    print(f'='*50)
+    print(f'🧠 AI MODELS (Groq/General):')
     for i, m in enumerate(MODEL_CONFIGS):
         role = "⭐ Utama" if i == 0 else f"Fallback #{i}"
         print(f'  {i+1}. {m["label"]} [{role}]')
-    print(f'Auto-Fallback: Aktif (switch jika sisa < {int(FALLBACK_THRESHOLD*100)}%)')
-    print(f'Tracking: LIVE dari Groq response headers 🌐')
-    print(f'Search Providers ({len(search_manager.providers)}):')
+    
+    print(f'\n💎 AI MODELS (Gemini - Specialized):')
+    for i, m in enumerate(GEMINI_MODEL_CONFIGS):
+        print(f'  • {m["label"]} ({m["name"]})')
+
+    print(f'\n⚙️ CONFIGURATION:')
+    print(f'  • Auto-Fallback: Aktif (switch jika sisa < {int(FALLBACK_THRESHOLD*100)}%)')
+    print(f'  • Tracking: LIVE dari Groq response headers 🌐')
+    print(f'  • Search Providers ({len(search_manager.providers)}):')
     for p in search_manager.providers:
-        print(f'  • {p["name"]} | Limit: {p["credits"]}')
-    print(f'Saham System: Signal Scanner (tiap {SCAN_INTERVAL_MINUTES}m) + Watchlist (tiap {WATCHLIST_CACHE_MINUTES}m)')
-    print(f'Alert Channel: {ALERT_CHANNEL_ID} | Watchlist Channel: {WATCHLIST_CHANNEL_ID}')
+        print(f'    - {p["name"]} | Limit: {p["credits"]}')
+    
+    print(f'\n📈 SAHAM SYSTEM:')
+    print(f'  • SCANNER: Tiap {SCAN_INTERVAL_MINUTES}m')
+    print(f'  • WATCHLIST: Tiap {WATCHLIST_CACHE_MINUTES}m')
+    
     active = model_manager.get_best_model()
-    print(f'🤖 Model Aktif: {active["label"]} ({active["name"]})')
+    print(f'\n🤖 MODEL AKTIF SAAT INI: {active["label"]}')
+    print(f'='*50)
 
 @discord_client.event
 async def on_message(message):
@@ -1548,6 +1694,7 @@ async def on_message(message):
     # Command: !help — Daftar Perintah
     # ==========================================
     if message.content.strip() == '!help':
+        print(f"[{datetime.now(JAKARTA_TZ).strftime('%H:%M:%S')}] [Command] !help by {message.author}")
         help_msg = f"🤖 **Daftar Perintah FatihAI**\n"
         help_msg += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
         help_msg += f"💬 **CHAT & AI**\n"
@@ -1555,7 +1702,9 @@ async def on_message(message):
         help_msg += f"• `!status` : Cek kesehatan & kuota model AI\n\n"
         help_msg += f"📈 **SAHAM & PASAR**\n"
         help_msg += f"• `!saham` : Lihat watchlist trending hari ini\n"
-        help_msg += f"• `!saham cari [KODE]` : Analisa 3-Lensa mendalam (Fundamental, Teknikal, Narasi)\n\n"
+        help_msg += f"• `!saham cari [KODE]` : Analisa 3-Lensa mendalam (Fundamental, Teknikal, Narasi)\n"
+        help_msg += f"• `!saham planning [STRATEGI] [KODE]` : Buat trading plan & monitoring aktif\n"
+        help_msg += f"• `!saham planning list` : Lihat & hapus daftar monitoring aktif Boss\n\n"
         help_msg += f"💰 **PORTO SAYA**\n"
         help_msg += f"• `!porto` : Cek performa semua saham di porto Boss\n"
         help_msg += f"• `!porto tambah [KODE] [HARGA]` : Simpan saham ke porto\n"
@@ -1568,6 +1717,7 @@ async def on_message(message):
     # Command: !porto — Kelola Portofolio
     # ==========================================
     if message.content.startswith('!porto'):
+        print(f"[{datetime.now(JAKARTA_TZ).strftime('%H:%M:%S')}] [Command] !porto by {message.author}")
         user_id = message.author.id
         if user_id not in user_portfolios:
             user_portfolios[user_id] = {}
@@ -1610,7 +1760,11 @@ async def on_message(message):
                     msg += f"📊 **ESTIMASI TOTAL G/L: {total_pct:+.2f}%** — *{indicator}*\n"
                 
                 msg += f"\n-# 🤖 *FatihAI Portfolio Tracker*"
-                await message.reply(msg)
+                
+                chunks = split_message(msg)
+                await message.reply(chunks[0])
+                for chunk in chunks[1:]:
+                    await message.channel.send(chunk)
             return
 
         # 2. !porto tambah [KODE] [HARGA]
@@ -1657,6 +1811,7 @@ async def on_message(message):
     # Command: !saham — Watchlist & Analisa Saham
     # ==========================================
     if message.content.strip() == '!saham':
+        print(f"[{datetime.now(JAKARTA_TZ).strftime('%H:%M:%S')}] [Command] !saham (Watchlist) by {message.author}")
         async with message.channel.typing():
             try:
                 data, from_cache = await asyncio.to_thread(saham_manager.get_watchlist)
@@ -1673,6 +1828,7 @@ async def on_message(message):
         return
 
     if message.content.startswith('!saham planning'):
+        print(f"[{datetime.now(JAKARTA_TZ).strftime('%H:%M:%S')}] [Command] !saham planning by {message.author}")
         cmd_parts = message.content.strip().split()
         
         # Guide jika argumen tidak lengkap
@@ -1690,22 +1846,58 @@ async def on_message(message):
             help_planning += "📌 **Contoh:** `!saham planning swing BBCA 5000000`"
             await message.reply(help_planning)
             return
-
-        strategy_key = cmd_parts[2].lower()
-        ticker = cmd_parts[3].upper()
-        
-        # Default budget Rp 1.000.000
-        budget = 1000000 
-        if len(cmd_parts) >= 5:
-            try:
-                # Bersihkan karakter non-angka
-                raw_budget = "".join(filter(str.isdigit, cmd_parts[4]))
-                if raw_budget:
-                    budget = float(raw_budget)
-            except: pass
-
         async with message.channel.typing():
             try:
+                # --- SUB-COMMAND: !saham planning list ---
+                if len(cmd_parts) == 3 and cmd_parts[2].lower() == 'list':
+                    user_plans = [(t, p) for (uid, t), p in user_active_plans.items() if uid == message.author.id]
+                    msg_list = f"📋 **Daftar Saham Monitoring Boss {message.author.name}**\n"
+                    msg_list += f"━━━━━━━━━━━━━━━━━━━━━\n"
+                    msg_list += f"📌 *Limit: {len(user_plans)}/3 Plan Aktif*\n\n"
+                    
+                    if not user_plans:
+                        msg_list += "Boss belum punya planning aktif. Buat dulu pakai `!saham planning [strategi] [ticker]`"
+                        await message.reply(msg_list)
+                        return
+
+                    for i, (ticker, plan) in enumerate(user_plans, 1):
+                        msg_list += f"{i}. **{ticker}** | Strategy: `{plan['strategy']}` | Entry: `Rp {plan['entry_price']:,.0f}`\n"
+                    
+                    msg_list += f"\n💡 *Gunakan tombol di bawah untuk berhenti memonitor saham tersebut.*"
+                    
+                    view = SahamPlanningListView(message.author.id, user_plans)
+                    await message.reply(msg_list, view=view)
+                    return
+
+                # 2. Kasus !saham planning [strategy] [ticker]
+                if len(cmd_parts) < 4:
+                    await message.reply("💡 Cara pakai: `!saham planning [strategy] [ticker] [budget]`\nContoh: `!saham planning swing BBCA 5000000`")
+                    return
+
+                strategy_key = cmd_parts[2].lower()
+                ticker = cmd_parts[3].upper()
+
+                # --- GUARD: Check Limit 3 Plans ---
+                user_plans_count = len([(uid, t) for (uid, t) in user_active_plans.keys() if uid == message.author.id])
+                if user_plans_count >= 3 and (message.author.id, ticker) not in user_active_plans:
+                    await message.reply(f"❌ **Limit Tercapai!** Boss sudah memonitor 3 saham (Max).\n💡 Hapus salah satu plan pakai `!saham planning list` sebelum buat yang baru.")
+                    return
+
+                # --- GUARD: Cek duplikasi planning ---
+                if (message.author.id, ticker) in user_active_plans:
+                    await message.reply(f"❌ Boss sudah memiliki planning aktif untuk **{ticker}**.\n💡 Hapus dulu planning sebelumnya pakai `!saham planning list` sebelum buat yang baru.")
+                    return
+                
+                # Default budget Rp 1.000.000
+                budget = 1000000 
+                if len(cmd_parts) >= 5:
+                    try:
+                        # Bersihkan karakter non-angka
+                        raw_budget = "".join(filter(str.isdigit, cmd_parts[4]))
+                        if raw_budget:
+                            budget = float(raw_budget)
+                    except: pass
+
                 result, err = await asyncio.to_thread(saham_manager.get_trading_plan, strategy_key, ticker, budget)
                 if err:
                     await message.reply(f"❌ {err}")
@@ -1717,8 +1909,14 @@ async def on_message(message):
                 msg += f"\n-# 🤖 *FatihAI Planning | {result['model']}*"
                 
                 chunks = split_message(msg)
-                await message.reply(chunks[0])
-                for chunk in chunks[1:]: await message.channel.send(chunk)
+                view = SendPlanningToDMView(message.author.id, msg)
+                
+                # Kirim semua chunk, view cuma di yang terakhir
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        last_msg = await message.reply(chunk, view=view if len(chunks) == 1 else None)
+                    else:
+                        last_msg = await message.channel.send(chunk, view=view if i == len(chunks) - 1 else None)
 
                 # --- AKTIFKAN MONITORING ---
                 # Key: (user_id, ticker)
@@ -1739,6 +1937,9 @@ async def on_message(message):
             except Exception as e:
                 await message.reply(f"❌ Error saat membuat planning: {e}")
         return
+
+    if message.content.startswith('!saham cari'):
+        print(f"[{datetime.now(JAKARTA_TZ).strftime('%H:%M:%S')}] [Command] !saham cari by {message.author}")
         query = message.content.replace('!saham cari ', '').strip()
         if not query:
             await message.reply("💡 Cara pakai: `!saham cari BBCA`")
@@ -1770,6 +1971,7 @@ async def on_message(message):
     # Command: !status — Cek status bot
     # ==========================================
     if message.content.strip() == '!status':
+        print(f"[{datetime.now(JAKARTA_TZ).strftime('%H:%M:%S')}] [Command] !status by {message.author}")
         selected = model_manager.get_best_model()
         uptime_seconds = int(time.time() - bot_start_time)
         hours, remainder = divmod(uptime_seconds, 3600)
@@ -1831,6 +2033,7 @@ async def on_message(message):
     # Command: !bro — Tanya FatihAI (General Chat)
     # ==========================================
     if message.content.startswith('!bro'):
+        print(f"[{datetime.now(JAKARTA_TZ).strftime('%H:%M:%S')}] [Command] !bro by {message.author}")
         allowed, retry_after = check_rate_limit(message.author.id)
         if not allowed:
             await message.reply(f"⏳ Wait Boss! Tunggu **{retry_after} detik** lagi.")
