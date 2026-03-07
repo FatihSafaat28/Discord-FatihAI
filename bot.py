@@ -1207,19 +1207,25 @@ class SendPlanningToDMView(discord.ui.View):
             return
         
         try:
+            # Defer agar punya waktu lebih (untuk kirim multiple DM)
+            await interaction.response.defer(ephemeral=True)
+            
             await interaction.user.send("📌 **Salinan Trading Plan Boss**\n━━━━━━━━━━━━━━━━━━━━━")
             chunks = split_message(self.plan_text)
             for chunk in chunks:
                 await interaction.user.send(chunk)
             
-            await interaction.response.send_message("✅ Berhasil dikirim ke DM Boss!", ephemeral=True)
+            await interaction.followup.send("✅ Berhasil dikirim ke DM Boss!", ephemeral=True)
             # Hapus button dari pesan asli agar tidak bisa diklik 2x
             await interaction.message.edit(view=None)
             self.stop()
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Gagal kirim DM. Pastikan DM Boss tidak di-private!", ephemeral=True)
+            await interaction.followup.send("❌ Gagal kirim DM. Pastikan DM Boss tidak di-private!", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Terjadi kesalahan: {e}", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ Terjadi kesalahan: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"❌ Terjadi kesalahan: {e}", ephemeral=True)
 
 class SahamPlanningListView(discord.ui.View):
     """View untuk menampilkan list planning aktif dengan tombol hapus."""
@@ -1709,7 +1715,10 @@ async def on_message(message):
         help_msg += f"• `!porto` : Cek performa semua saham di porto Boss\n"
         help_msg += f"• `!porto tambah [KODE] [HARGA]` : Simpan saham ke porto\n"
         help_msg += f"• `!porto hapus [KODE]` : Hapus saham dari porto Boss\n\n"
-        help_msg += f"-# 💡 *Tips: Cek channel #news-trading untuk Morning Briefing (08:30) & Evening Recap (16:30)!*"
+        help_msg += f"⚠️ **INFO PENTING:**\n"
+        help_msg += f"• **Limit Planning**: Maksimal 3 trading plan aktif per user.\n"
+        help_msg += f"• **Daily Reset**: Semua daftar `!porto` dan `!saham planning` akan di-reset setiap pukul **00:00 WIB**.\n\n"
+        help_msg += f"-# 💡 *Tips: Hasil planning bisa dikirim ke DM via tombol! Cek #news-trading untuk briefing berkala.*"
         await message.reply(help_msg)
         return
 
