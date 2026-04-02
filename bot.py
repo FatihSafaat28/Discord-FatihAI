@@ -1852,7 +1852,7 @@ async def on_message(message):
                 return
 
             # Start Session and get first analysis
-            session = ScalpingSession(message.author, final_ticker, discord_client, scalping_ws_manager, groq_client)
+            session = ScalpingSession(message.author, final_ticker, discord_client, scalping_ws_manager, groq_client, gemini_manager)
             active_scalping_sessions[message.author.id] = session
             
             first_analysis = await session.start()

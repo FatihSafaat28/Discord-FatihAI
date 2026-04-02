@@ -21,21 +21,23 @@ class FinnhubWebsocketManager:
     def __init__(self):
         if self._initialized: return
         self.api_key = os.getenv("FINNHUB_API_KEY")
+        print(f"DEBUG: [Finnhub] WS Manager Initializing. Key Found: {self.api_key is not None}")
         self.uri = f"wss://ws.finnhub.io?token={self.api_key}"
         self.subscribers = {}  # { symbol: [callbacks] }
         self.ws = None
-        self.active_tasks = []
         self._initialized = True
         self.is_running = False
 
     async def start(self):
         """Start the background websocket connection task."""
         if self.is_running: return
+        print(f"DEBUG: [Finnhub] Starting WS Manager Loop...")
         self.is_running = True
         asyncio.create_task(self._run())
 
     async def _run(self):
         """Internal run loop for websocket."""
+        print(f"DEBUG: [Finnhub] WS Thread started. URI: {self.uri[:20]}...")
         while self.is_running:
             try:
                 async with websockets.connect(self.uri) as ws:
@@ -44,6 +46,7 @@ class FinnhubWebsocketManager:
                     
                     # Re-subscribe to all active symbols on reconnect
                     for symbol in self.subscribers.keys():
+                        print(f"DEBUG: [Finnhub] Re-subscribing to {symbol}")
                         await self.ws.send(json.dumps({"type": "subscribe", "symbol": symbol}))
 
                     async for message in ws:
@@ -54,11 +57,13 @@ class FinnhubWebsocketManager:
                                 symbol = trade.get("s")
                                 price = trade.get("p")
                                 if symbol in self.subscribers:
+                                    # print(f"DEBUG: [Finnhub] Price update: {symbol} -> {price}")
                                     for callback in self.subscribers[symbol]:
-                                        # Use asyncio.create_task to avoid blocking the receiver
                                         asyncio.create_task(callback(price))
                         elif data.get("type") == "error":
                             print(f"❌ [Finnhub] WS Error: {data.get('msg')}")
+                            if "API key" in data.get('msg', ''):
+                                print("   💡 Check your FINNHUB_API_KEY in .env!")
 
             except Exception as e:
                 print(f"⚠️ [Finnhub] WS Connection lost: {e}. Reconnecting in 5s...")
@@ -68,8 +73,19 @@ class FinnhubWebsocketManager:
         """Subscribe to a symbol with a callback."""
         if symbol not in self.subscribers:
             self.subscribers[symbol] = []
-            if self.ws and self.ws.open:
-                await self.ws.send(json.dumps({"type": "subscribe", "symbol": symbol}))
+            print(f"DEBUG: [Finnhub] Registering new subscriber for {symbol}")
+            if self.ws:
+                try:
+                    is_closed = getattr(self.ws, 'closed', False)
+                    if not is_closed:
+                        print(f"DEBUG: [Finnhub] Sending WS subscribe for {symbol}")
+                        await self.ws.send(json.dumps({"type": "subscribe", "symbol": symbol}))
+                    else:
+                        print(f"DEBUG: [Finnhub] WS is closed, skipping immediate subscribe for {symbol}")
+                except Exception as e:
+                    print(f"⚠️ [Finnhub] Failed to send subscribe for {symbol}: {e}")
+            else:
+                print(f"DEBUG: [Finnhub] WS not connected yet, {symbol} will subscribe on connect.")
         
         self.subscribers[symbol].append(callback)
         print(f"🔔 [Finnhub] Subscribed to {symbol}")
@@ -82,17 +98,23 @@ class FinnhubWebsocketManager:
             
             if not self.subscribers[symbol]:
                 del self.subscribers[symbol]
-                if self.ws and self.ws.open:
-                    await self.ws.send(json.dumps({"type": "unsubscribe", "symbol": symbol}))
+                if self.ws:
+                    try:
+                        is_closed = getattr(self.ws, 'closed', False)
+                        if not is_closed:
+                            await self.ws.send(json.dumps({"type": "unsubscribe", "symbol": symbol}))
+                    except Exception as e:
+                        print(f"⚠️ [Finnhub] Failed to send unsubscribe for {symbol}: {e}")
                 print(f"🔕 [Finnhub] Unsubscribed from {symbol}")
 
 class ScalpingSession:
-    def __init__(self, user, ticker, discord_client, manager, groq_client):
+    def __init__(self, user, ticker, discord_client, manager, groq_client, gemini_manager):
         self.user = user
         self.ticker = ticker
         self.client = discord_client
         self.manager = manager
         self.groq_client = groq_client
+        self.gemini_manager = gemini_manager
         self.balance = 100_000_000  # IDR
         self.start_time = time.time()
         self.duration = 30 * 60  # 30 minutes
@@ -161,15 +183,17 @@ class ScalpingSession:
 
     async def run_ai_analysis(self, is_re_analyze=False):
         """Call AI to get trade recommendations."""
+        print(f"DEBUG: run_ai_analysis called. Current price: {self.current_price}")
         if not self.current_price: 
-            return "⏳ Belum ada data harga masuk, Boss. Mohon tunggu sebentar..."
+            return "⏳ Belum ada data harga masuk, Boss. Mohon tunggu sebentar sampai data bursa masuk..."
         
         status_msg = "Sedang melakukan analisis ulang..." if is_re_analyze else "Sedang melakukan analisis pasar untuk 5 menit ke depan..."
         try:
             # We only send status to DM if it's a re-analysis or periodic
             if is_re_analyze:
                 await self.user.send(f"🔍 **[{self.ticker}]** {status_msg}")
-        except: pass
+        except Exception as e:
+            print(f"DEBUG: Failed to send status to user: {e}")
 
         # Prepare price data history for prompt
         recent_prices = [p["price"] for p in self.price_buffer[-100:]]
@@ -198,99 +222,106 @@ Format output JSON:
         """
 
         try:
+            print(f"DEBUG: Calling AI for {self.ticker}...")
             ai_data = await self._call_ai(prompt)
+            print(f"DEBUG: AI response: {ai_data}")
             msg = ""
             if ai_data and ai_data.get("recommendation") == "BUY":
                 # Execute simulated buy
                 self.position = {
-                    "buy_price": ai_data["buy_price"],
-                    "tp": ai_data["tp"],
-                    "sl": ai_data["sl"],
-                    "amount": ai_data["amount"],
-                    "why": ai_data["why"]
+                    "buy_price": ai_data.get("buy_price", self.current_price),
+                    "tp": ai_data.get("tp"),
+                    "sl": ai_data.get("sl"),
+                    "amount": ai_data.get("amount", 10_000_000),
+                    "why": ai_data.get("why", "Analisis teknis mendukung.")
                 }
                 
                 # Update balance (simulated lock)
-                self.balance -= ai_data["amount"]
+                self.balance -= self.position["amount"]
                 
                 msg = f"🟢 **BUY SIGNAL!** \n"
                 msg += f"Ticker: `{self.ticker}`\n"
-                msg += f"Harga Beli: `Rp {ai_data['buy_price']:,.2f}`\n"
-                msg += f"Take Profit: `Rp {ai_data['tp']:,.2f}`\n"
-                msg += f"Stop Loss: `Rp {ai_data['sl']:,.2f}`\n"
-                msg += f"Modal Trade: `Rp {ai_data['amount']:,.0f}`\n"
+                msg += f"Harga Beli: `Rp {self.position['buy_price']:,.2f}`\n"
+                msg += f"Take Profit: `Rp {self.position['tp']:,.2f}`\n"
+                msg += f"Stop Loss: `Rp {self.position['sl']:,.2f}`\n"
+                msg += f"Modal Trade: `Rp {self.position['amount']:,.0f}`\n"
                 msg += f"Sisa Saldo: `Rp {self.balance:,.0f}`\n\n"
-                msg += f"💡 **Analogi AI**: {ai_data['why']}"
+                msg += f"💡 **Analogi AI**: {self.position['why']}"
             else:
-                msg = f"🟡 **WAIT**: AI menyarankan untuk menunggu momen yang tepat. \n💡 {ai_data.get('why', 'Pasar sedang konsolidasi.')}"
+                msg = f"🟡 **WAIT**: AI menyarankan untuk menunggu momen yang tepat. \n💡 {ai_data.get('why', 'Pasar sedang konsolidasi atau data belum cukup.') if ai_data else 'AI tidak memberikan respon valid.'}"
             
             # Always send to DM for any analysis (re-analysis or periodic)
             await self.user.send(msg)
             return msg
         
         except Exception as e:
-            print(f"❌ AI Error: {e}")
+            print(f"❌ AI Error in run_ai_analysis: {e}")
             err_msg = f"⚠️ Maaf Boss, terjadi error saat analisis AI: {e}"
             try: await self.user.send(err_msg)
             except: pass
             return err_msg
 
     async def _call_ai(self, prompt):
-        """Helper to call Groq with model fallback."""
-        # Use simple groq call if groq_client is available
-        # We'll pass groq_client to ScalpingSession on init
-        if not hasattr(self, 'groq_client') or not self.groq_client:
-            return None
-            
-        models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
-        
-        for model in models:
+        """Helper to call Gemini (including auto-fallbacks) with JSON response."""
+        if hasattr(self, 'gemini_manager') and self.gemini_manager:
             try:
-                completion = self.groq_client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"},
-                    max_tokens=300
-                )
-                res_content = completion.choices[0].message.content
-                return json.loads(res_content)
+                print(f"DEBUG: [Scalping AI] Requesting analysis from Gemini Manager...")
+                # GeminiManager.generate_analysis internally handles fallback across all its models
+                res_tuple = await asyncio.to_thread(self.gemini_manager.generate_analysis, prompt)
+                res_content, label = res_tuple
+                
+                if res_content:
+                    print(f"DEBUG: [Scalping AI] Success using {label}")
+                    # Clean up common AI markdown artifacts
+                    res_content = res_content.replace("```json", "").replace("```", "").strip()
+                    return json.loads(res_content)
             except Exception as e:
-                print(f"  ⚠️ Model {model} limit/error: {e}")
-                continue
+                print(f"  ❌ [Scalping AI] All Gemini models failed or JSON error: {e}")
+
+        print("❌ [Scalping AI] Final failure: No AI response could be generated.")
         return None
 
     async def _check_signals(self):
         """Real-time monitoring of TP/SL."""
-        if not self.position or not self.current_price: return
+        # Capture current state to avoid race conditions from fast price updates
+        pos = self.position
+        price = self.current_price
+        
+        if not pos or not price: 
+            return
         
         # Profit hit
-        if self.current_price >= self.position["tp"]:
-            profit = self.position["amount"] * (self.current_price / self.position["buy_price"])
+        if price >= pos["tp"]:
+            self.position = None # Nullify immediately before awaiting
+            profit = pos["amount"] * (price / pos["buy_price"])
             self.balance += profit
             
             msg = f"✅ **TAKE PROFIT HIT!** \n"
             msg += f"Ticker: `{self.ticker}`\n"
-            msg += f"Harga Jual: `Rp {self.current_price:,.2f}`\n"
-            msg += f"Hasil: `+Rp {profit - self.position['amount']:,.0f}` ✨\n"
+            msg += f"Harga Jual: `Rp {price:,.2f}`\n"
+            msg += f"Hasil: `+Rp {profit - pos['amount']:,.0f}` ✨\n"
             msg += f"Saldo Baru: `Rp {self.balance:,.0f}`"
-            await self.user.send(msg)
-            self.position = None
+            try: await self.user.send(msg)
+            except: pass
+            return
 
         # Loss hit
-        elif self.current_price <= self.position["sl"]:
-            loss_rem = self.position["amount"] * (self.current_price / self.position["buy_price"])
+        elif price <= pos["sl"]:
+            self.position = None # Nullify immediately before awaiting
+            loss_rem = pos["amount"] * (price / pos["buy_price"])
             self.balance += loss_rem
             
             msg = f"🔴 **STOP LOSS HIT!** \n"
             msg += f"Ticker: `{self.ticker}`\n"
-            msg += f"Harga Jual (Minus): `Rp {self.current_price:,.2f}`\n"
-            msg += f"Hasil: `-Rp {self.position['amount'] - loss_rem:,.0f}` 💀\n"
+            msg += f"Harga Jual (Minus): `Rp {price:,.2f}`\n"
+            msg += f"Hasil: `-Rp {pos['amount'] - loss_rem:,.0f}` 💀\n"
             msg += f"Saldo Baru: `Rp {self.balance:,.0f}`"
-            await self.user.send(msg)
-            self.position = None
+            try: await self.user.send(msg)
+            except: pass
             
             # Handle rugi: Immediate re-analysis
             await self.run_ai_analysis(is_re_analyze=True)
+            return
 
     async def _notify_end(self):
         """Notify user that 30 mins session is over."""
