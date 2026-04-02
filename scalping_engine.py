@@ -20,7 +20,7 @@ class FinnhubWebsocketManager:
 
     def __init__(self):
         if self._initialized: return
-        self.api_key = os.getenv("FINNHUB_API_KEY", "d76tf6hr01qtg3nesligd76tf6hr01qtg3neslj0")
+        self.api_key = os.getenv("FINNHUB_API_KEY")
         self.uri = f"wss://ws.finnhub.io?token={self.api_key}"
         self.subscribers = {}  # { symbol: [callbacks] }
         self.ws = None
@@ -108,8 +108,17 @@ class ScalpingSession:
     async def start(self):
         """Start the session."""
         await self.manager.subscribe(self.ticker, self.on_price_update)
+        
+        # Start periodic background loop
         asyncio.create_task(self._session_loop())
         print(f"🚀 [Session] Started for {self.user.name} on {self.ticker}")
+
+        # Wait a moment for price data to arrive before first analysis
+        await asyncio.sleep(2) 
+        
+        # Initial analysis for channel response
+        self.last_analysis_time = time.time()
+        return await self.run_ai_analysis()
 
     async def stop(self):
         """Stop the session."""
@@ -152,11 +161,14 @@ class ScalpingSession:
 
     async def run_ai_analysis(self, is_re_analyze=False):
         """Call AI to get trade recommendations."""
-        if not self.current_price: return
+        if not self.current_price: 
+            return "⏳ Belum ada data harga masuk, Boss. Mohon tunggu sebentar..."
         
         status_msg = "Sedang melakukan analisis ulang..." if is_re_analyze else "Sedang melakukan analisis pasar untuk 5 menit ke depan..."
         try:
-            await self.user.send(f"🔍 **[{self.ticker}]** {status_msg}")
+            # We only send status to DM if it's a re-analysis or periodic
+            if is_re_analyze:
+                await self.user.send(f"🔍 **[{self.ticker}]** {status_msg}")
         except: pass
 
         # Prepare price data history for prompt
@@ -187,6 +199,7 @@ Format output JSON:
 
         try:
             ai_data = await self._call_ai(prompt)
+            msg = ""
             if ai_data and ai_data.get("recommendation") == "BUY":
                 # Execute simulated buy
                 self.position = {
@@ -208,15 +221,19 @@ Format output JSON:
                 msg += f"Modal Trade: `Rp {ai_data['amount']:,.0f}`\n"
                 msg += f"Sisa Saldo: `Rp {self.balance:,.0f}`\n\n"
                 msg += f"💡 **Analogi AI**: {ai_data['why']}"
-                await self.user.send(msg)
             else:
-                await self.user.send(f"🟡 **WAIT**: AI menyarankan untuk menunggu momen yang tepat. \n💡 {ai_data.get('why', 'Pasar sedang konsolidasi.')}")
+                msg = f"🟡 **WAIT**: AI menyarankan untuk menunggu momen yang tepat. \n💡 {ai_data.get('why', 'Pasar sedang konsolidasi.')}"
+            
+            # Always send to DM for any analysis (re-analysis or periodic)
+            await self.user.send(msg)
+            return msg
         
         except Exception as e:
             print(f"❌ AI Error: {e}")
-            try:
-                await self.user.send(f"⚠️ Maaf Boss, terjadi error saat analisis AI: {e}")
+            err_msg = f"⚠️ Maaf Boss, terjadi error saat analisis AI: {e}"
+            try: await self.user.send(err_msg)
             except: pass
+            return err_msg
 
     async def _call_ai(self, prompt):
         """Helper to call Groq with model fallback."""

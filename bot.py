@@ -29,7 +29,7 @@ WATCHLIST_CHANNEL_ID = os.getenv('WATCHLIST_CHANNEL_ID')
 ALERT_CHANNEL_ID = os.getenv('ALERT_CHANNEL_ID')
 NEWS_CHANNEL_ID = os.getenv('NEWS_CHANNEL_ID')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY', 'd76tf6hr01qtg3nesligd76tf6hr01qtg3neslj0')
+FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY')
 
 # Validasi ENV (Penting untuk Railway)
 REQUIRED_ENVS = [
@@ -1755,7 +1755,9 @@ async def on_message(message):
         help_msg += f"• `!saham` : Lihat watchlist trending hari ini\n"
         help_msg += f"• `!saham cari [KODE]` : Analisa 3-Lensa mendalam (Fundamental, Teknikal, Narasi)\n"
         help_msg += f"• `!saham planning [STRATEGI] [KODE]` : Buat trading plan & monitoring aktif\n"
-        help_msg += f"• `!saham planning list` : Lihat & hapus daftar monitoring aktif Boss\n\n"
+        help_msg += f"• `!saham planning list` : Lihat & hapus daftar monitoring aktif Boss\n"
+        help_msg += f"• `!scalping [KODE]` : Mulai sesi simulasi scalping 30 menit\n"
+        help_msg += f"• `!scalping reset` : Paksa berhenti sesi scalping aktif\n\n"
         help_msg += f"💰 **PORTO SAYA**\n"
         help_msg += f"• `!porto` : Cek performa semua saham di porto Boss\n"
         help_msg += f"• `!porto tambah [KODE] [HARGA]` : Simpan saham ke porto\n"
@@ -1781,7 +1783,8 @@ async def on_message(message):
             help_sc += "Uji nyali Boss dengan simulasi trading modal **Rp 100 Juta**!\n\n"
             help_sc += "💻 **Cara Pakai:**\n"
             help_sc += "• `!scalping [TICKER]` : Mulai sesi 30 menit.\n"
-            help_sc += "• Contoh Saham US : `!scalping AAPL`, `!scalping TSLA`, `!scalping NVDA`\n"
+            help_sc += "• `!scalping reset` : Paksa berhenti & reset sesi aktif.\n"
+            help_sc += "• Contoh Saham US : `!scalping AAPL`, `!scalping TSLA`\n"
             help_sc += "• Contoh Crypto : `!scalping BINANCE:BTCUSDT`, `!scalping BINANCE:ETHUSDT`\n\n"
             help_sc += "📌 **List Kode Populer untuk Dicoba:**\n"
             help_sc += "• `AAPL` (Apple)\n"
@@ -1791,6 +1794,17 @@ async def on_message(message):
             help_sc += "• `BINANCE:ETHUSDT` (Ethereum)\n\n"
             help_sc += "💡 *FatihAI akan memberikan sinyal Buy/TP/SL setiap 5 menit via DM Boss!*"
             await message.reply(help_sc)
+            return
+
+        # 1.5. !scalping reset (Force stop session)
+        if cmd_parts[1].lower() == 'reset':
+            if message.author.id in active_scalping_sessions:
+                session = active_scalping_sessions[message.author.id]
+                await session.stop()
+                del active_scalping_sessions[message.author.id]
+                await message.reply("🔄 **Sesi Scalping Berhasil di-RESET!**\nSesi sebelumnya dihentikan. Boss bisa memulai sesi baru dengan saldo simulasi segar senilai Rp 100 Juta.")
+            else:
+                await message.reply("❌ Boss tidak memiliki sesi scalping aktif yang sedang berjalan.")
             return
 
         # 2. !scalping [TICKER]
@@ -1837,12 +1851,18 @@ async def on_message(message):
                 await message.reply(f"❌ Wah, kode `{raw_query}` benar-benar tidak ketemu. Coba cek di website Finnhub atau pakai kode populer Boss!")
                 return
 
-            # Start Session
+            # Start Session and get first analysis
             session = ScalpingSession(message.author, final_ticker, discord_client, scalping_ws_manager, groq_client)
             active_scalping_sessions[message.author.id] = session
-            await session.start()
             
-            await message.reply(f"✅ **Sesi Scalping Dimulai!** \nTicker: `{final_ticker}` \n\n🚀 Saya sudah standby memantau harga. Cek DM Boss sekarang untuk analisis pertama!")
+            first_analysis = await session.start()
+            
+            resp_msg = f"✅ **Sesi Scalping `{final_ticker}` Dimulai!** \n"
+            resp_msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+            resp_msg += f"{first_analysis}\n\n"
+            resp_msg += "💡 *Analisis berikutnya akan dilanjutkan di DM Boss supaya tidak berisik!* 🤫🚀"
+            
+            await message.reply(resp_msg)
         return
 
     # ==========================================
