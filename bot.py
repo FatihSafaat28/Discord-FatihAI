@@ -15,6 +15,7 @@ from groq import Groq
 from ddgs import DDGS
 from dotenv import load_dotenv
 from discord.ext import tasks
+from scalping_engine import scalping_ws_manager, ScalpingSession, active_scalping_sessions
 
 # ==========================================
 # 1. KUNCI RAHASIA (dari .env)
@@ -28,11 +29,12 @@ WATCHLIST_CHANNEL_ID = os.getenv('WATCHLIST_CHANNEL_ID')
 ALERT_CHANNEL_ID = os.getenv('ALERT_CHANNEL_ID')
 NEWS_CHANNEL_ID = os.getenv('NEWS_CHANNEL_ID')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY', 'd76tf6hr01qtg3nesligd76tf6hr01qtg3neslj0')
 
 # Validasi ENV (Penting untuk Railway)
 REQUIRED_ENVS = [
     'GROQ_API_KEY', 'DISCORD_TOKEN', 'TAVILY_API_KEY', 'SERPER_API_KEY',
-    'WATCHLIST_CHANNEL_ID', 'ALERT_CHANNEL_ID', 'NEWS_CHANNEL_ID', 'GEMINI_API_KEY'
+    'WATCHLIST_CHANNEL_ID', 'ALERT_CHANNEL_ID', 'NEWS_CHANNEL_ID', 'GEMINI_API_KEY', 'FINNHUB_API_KEY'
 ]
 missing = [env for env in REQUIRED_ENVS if not os.getenv(env)]
 if missing:
@@ -1188,6 +1190,28 @@ FORMAT WAJIB:
                 self.alerted_stocks[tc] = now_ts
         return alerts
 
+    def search_finnhub_ticker(self, query):
+        """Search for symbol on Finnhub and return matches."""
+        try:
+            url = f"https://finnhub.io/api/v1/search?q={query}&token={os.getenv('FINNHUB_API_KEY')}"
+            r = http_requests.get(url)
+            r.raise_for_status()
+            data = r.json()
+            results = data.get('result', [])
+            # Filter matches (prioritize exact match or US stocks for simplicity in this demo)
+            # Finnhub search returns many things, we want stocks/crypto
+            matches = []
+            for res in results:
+                symbol = res.get('symbol')
+                display = res.get('displaySymbol')
+                type_ = res.get('type')
+                if symbol and type_ in ['Common Stock', 'Crypto', 'ETP']:
+                    matches.append({"symbol": symbol, "display": display, "description": res.get('description')})
+            return matches[:5]
+        except Exception as e:
+            print(f"❌ Finnhub search error: {e}")
+            return []
+
 
 # ==========================================
 # 3.5. UI COMPONENTS (Buttons/Views)
@@ -1664,6 +1688,9 @@ async def on_ready():
         unified_market_news.start()
     if not market_session_alert.is_running():
         market_session_alert.start()
+    
+    # Start Scalping Websocket
+    await scalping_ws_manager.start()
 
     print(f'Yeay! Bot {discord_client.user} sudah online dan siap digunakan! 🚀')
     print(f'='*50)
@@ -1720,6 +1747,74 @@ async def on_message(message):
         help_msg += f"• **Daily Reset**: Semua daftar `!porto` dan `!saham planning` akan di-reset setiap pukul **00:00 WIB**.\n\n"
         help_msg += f"-# 💡 *Tips: Hasil planning bisa dikirim ke DM via tombol! Cek #news-trading untuk briefing berkala.*"
         await message.reply(help_msg)
+        return
+
+    # ==========================================
+    # Command: !scalping — Real-time Demo session
+    # ==========================================
+    if message.content.startswith('!scalping'):
+        print(f"[{datetime.now(JAKARTA_TZ).strftime('%H:%M:%S')}] [Command] !scalping by {message.author}")
+        cmd_parts = message.content.strip().split()
+        
+        # 1. !scalping (Help & Examples)
+        if len(cmd_parts) == 1:
+            help_sc = "🎮 **DEMO SCALPING REAL-TIME (30 Menit)** 🚀\n"
+            help_sc += "━━━━━━━━━━━━━━━━━━━━━\n"
+            help_sc += "Uji nyali Boss dengan simulasi trading modal **Rp 100 Juta**!\n\n"
+            help_sc += "💻 **Cara Pakai:**\n"
+            help_sc += "• `!scalping [TICKER]` : Mulai sesi 30 menit.\n"
+            help_sc += "• Contoh Saham US : `!scalping AAPL`, `!scalping TSLA`, `!scalping NVDA`\n"
+            help_sc += "• Contoh Crypto : `!scalping BINANCE:BTCUSDT`, `!scalping BINANCE:ETHUSDT`\n\n"
+            help_sc += "📌 **List Kode Populer untuk Dicoba:**\n"
+            help_sc += "• `AAPL` (Apple)\n"
+            help_sc += "• `TSLA` (Tesla)\n"
+            help_sc += "• `AMZN` (Amazon)\n"
+            help_sc += "• `BINANCE:BTCUSDT` (Bitcoin)\n"
+            help_sc += "• `BINANCE:ETHUSDT` (Ethereum)\n\n"
+            help_sc += "💡 *FatihAI akan memberikan sinyal Buy/TP/SL setiap 5 menit via DM Boss!*"
+            await message.reply(help_sc)
+            return
+
+        # 2. !scalping [TICKER]
+        ticker = cmd_parts[1].upper()
+        
+        # Guard: One session at a time
+        if message.author.id in active_scalping_sessions:
+            existing = active_scalping_sessions[message.author.id]
+            if existing.is_active:
+                await message.reply(f"⚠️ Boss masih punya sesi aktif untuk `{existing.ticker}`! Tunggu sampai selesai ya.")
+                return
+
+        async with message.channel.typing():
+            # Validate ticker with Finnhub Search
+            matches = saham_manager.search_finnhub_ticker(ticker)
+            
+            # Find best match (exact or first)
+            final_ticker = None
+            for m in matches:
+                if m['symbol'] == ticker or m['display'] == ticker:
+                    final_ticker = m['symbol']
+                    break
+            
+            if not final_ticker and matches:
+                # Suggest closest matches
+                suggestion_msg = f"❌ Kode `{ticker}` tidak ditemukan, Boss. \n\n"
+                suggestion_msg += f"**Mungkin maksud Boss salah satu dari ini?**\n"
+                for m in matches:
+                    suggestion_msg += f"• `!scalping {m['symbol']}` ({m['description']})\n"
+                suggestion_msg += f"\n💡 *Silakan coba lagi dengan kode yang benar!*"
+                await message.reply(suggestion_msg)
+                return
+            elif not final_ticker and not matches:
+                await message.reply(f"❌ Wah, kode `{ticker}` benar-benar tidak ketemu. Coba cek di website Finnhub atau pakai kode populer Boss!")
+                return
+
+            # Start Session
+            session = ScalpingSession(message.author, final_ticker, discord_client, scalping_ws_manager, groq_client)
+            active_scalping_sessions[message.author.id] = session
+            await session.start()
+            
+            await message.reply(f"✅ **Sesi Scalping Dimulai!** \nTicker: `{final_ticker}` \n\n🚀 Saya sudah standby memantau harga. Cek DM Boss sekarang untuk analisis pertama!")
         return
 
     # ==========================================
