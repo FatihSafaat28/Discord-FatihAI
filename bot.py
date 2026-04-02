@@ -1195,17 +1195,20 @@ FORMAT WAJIB:
         try:
             # Smart fallback for common terms
             alias_map = {
-                "GOLD": "XAUUSD",
-                "EMAS": "XAUUSD",
-                "SILVER": "XAGUSD",
-                "PERAK": "XAGUSD",
-                "BITCOIN": "BTCUSDT",
-                "ETHEREUM": "ETHUSDT"
+                "GOLD": "OANDA:XAU_USD",
+                "EMAS": "OANDA:XAU_USD",
+                "XAUUSD": "OANDA:XAU_USD",
+                "SILVER": "OANDA:XAG_USD",
+                "PERAK": "OANDA:XAG_USD",
+                "BITCOIN": "BINANCE:BTCUSDT",
+                "ETHEREUM": "BINANCE:ETHUSDT"
             }
             q = alias_map.get(query.upper(), query)
             
-            url = f"https://finnhub.io/api/v1/search?q={q}&token={os.getenv('FINNHUB_API_KEY')}"
-            r = http_requests.get(url)
+            # Use params for automatic URL encoding (Crucial for colons)
+            url = "https://finnhub.io/api/v1/search"
+            params = {"q": q, "token": os.getenv('FINNHUB_API_KEY')}
+            r = http_requests.get(url, params=params)
             r.raise_for_status()
             data = r.json()
             results = data.get('result', [])
@@ -1215,11 +1218,13 @@ FORMAT WAJIB:
                 symbol = res.get('symbol')
                 display = res.get('displaySymbol')
                 type_ = res.get('type')
-                # Inclusion of more types: Forex, FX, Commodity, Spot, ETF, Index
-                # Basically anything that has a symbol and a description
                 if symbol and (not type_ or type_ not in ['N/A', 'DEBT']):
                     matches.append({"symbol": symbol, "display": display, "description": res.get('description') or "No description"})
             
+            # If no matches found but query looks like a valid symbol (contains colon), return it as a match
+            if not matches and ":" in q:
+                matches.append({"symbol": q, "display": q, "description": "Manual Ticker"})
+
             return matches[:5]
         except Exception as e:
             print(f"❌ Finnhub search error: {e}")
@@ -1804,27 +1809,24 @@ async def on_message(message):
             
             # Find best match
             final_ticker = None
-            alias_map = {"GOLD": "XAUUSD", "EMAS": "XAUUSD", "SILVER": "XAGUSD", "BITCOIN": "BTCUSDT"}
-            mapped_ticker = alias_map.get(raw_query)
+            # Extended alias list for matching
+            aliases = ["GOLD", "EMAS", "XAUUSD", "SILVER", "PERAK", "BITCOIN", "ETHEREUM", "BTC", "ETH"]
+            is_alias = raw_query in aliases
 
             for m in matches:
                 # 1. Exact match with symbol/display
                 if m['symbol'] == raw_query or m['display'] == raw_query:
                     final_ticker = m['symbol']
                     break
-                # 2. Match with mapped alias
-                if mapped_ticker and (mapped_ticker in m['symbol'] or mapped_ticker in m['display']):
-                    final_ticker = m['symbol']
-                    break
             
-            # 3. Fallback: If query was clearly a descriptive term (e.g. 'gold') 
-            # and no exact match, just use the first result if it seems relevant
-            if not final_ticker and matches and mapped_ticker:
-                final_ticker = matches[0]['symbol']
-
+            # 2. If it's a known alias or we only have one good match, use the first one
             if not final_ticker and matches:
-                # Suggest closest matches
-                suggestion_msg = f"❌ Kode `{raw_query}` tidak ditemukan secara spesifik, Boss. \n\n"
+                if is_alias or len(matches) == 1:
+                    final_ticker = matches[0]['symbol']
+            
+            if not final_ticker and matches:
+                # Suggest closest matches if multiple options and not a clear alias
+                suggestion_msg = f"❌ Kode `{raw_query}` kurang spesifik, Boss. \n\n"
                 suggestion_msg += f"**Mungkin maksud Boss salah satu dari ini?**\n"
                 for m in matches:
                     suggestion_msg += f"• `!scalping {m['symbol']}` ({m['description']})\n"
