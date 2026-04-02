@@ -1193,20 +1193,33 @@ FORMAT WAJIB:
     def search_finnhub_ticker(self, query):
         """Search for symbol on Finnhub and return matches."""
         try:
-            url = f"https://finnhub.io/api/v1/search?q={query}&token={os.getenv('FINNHUB_API_KEY')}"
+            # Smart fallback for common terms
+            alias_map = {
+                "GOLD": "XAUUSD",
+                "EMAS": "XAUUSD",
+                "SILVER": "XAGUSD",
+                "PERAK": "XAGUSD",
+                "BITCOIN": "BTCUSDT",
+                "ETHEREUM": "ETHUSDT"
+            }
+            q = alias_map.get(query.upper(), query)
+            
+            url = f"https://finnhub.io/api/v1/search?q={q}&token={os.getenv('FINNHUB_API_KEY')}"
             r = http_requests.get(url)
             r.raise_for_status()
             data = r.json()
             results = data.get('result', [])
-            # Filter matches (prioritize exact match or US stocks for simplicity in this demo)
-            # Finnhub search returns many things, we want stocks/crypto
+            
             matches = []
             for res in results:
                 symbol = res.get('symbol')
                 display = res.get('displaySymbol')
                 type_ = res.get('type')
-                if symbol and type_ in ['Common Stock', 'Crypto', 'ETP']:
-                    matches.append({"symbol": symbol, "display": display, "description": res.get('description')})
+                # Inclusion of more types: Forex, FX, Commodity, Spot, ETF, Index
+                # Basically anything that has a symbol and a description
+                if symbol and (not type_ or type_ not in ['N/A', 'DEBT']):
+                    matches.append({"symbol": symbol, "display": display, "description": res.get('description') or "No description"})
+            
             return matches[:5]
         except Exception as e:
             print(f"❌ Finnhub search error: {e}")
@@ -1776,7 +1789,7 @@ async def on_message(message):
             return
 
         # 2. !scalping [TICKER]
-        ticker = cmd_parts[1].upper()
+        raw_query = cmd_parts[1].upper()
         
         # Guard: One session at a time
         if message.author.id in active_scalping_sessions:
@@ -1787,18 +1800,31 @@ async def on_message(message):
 
         async with message.channel.typing():
             # Validate ticker with Finnhub Search
-            matches = saham_manager.search_finnhub_ticker(ticker)
+            matches = saham_manager.search_finnhub_ticker(raw_query)
             
-            # Find best match (exact or first)
+            # Find best match
             final_ticker = None
+            alias_map = {"GOLD": "XAUUSD", "EMAS": "XAUUSD", "SILVER": "XAGUSD", "BITCOIN": "BTCUSDT"}
+            mapped_ticker = alias_map.get(raw_query)
+
             for m in matches:
-                if m['symbol'] == ticker or m['display'] == ticker:
+                # 1. Exact match with symbol/display
+                if m['symbol'] == raw_query or m['display'] == raw_query:
+                    final_ticker = m['symbol']
+                    break
+                # 2. Match with mapped alias
+                if mapped_ticker and (mapped_ticker in m['symbol'] or mapped_ticker in m['display']):
                     final_ticker = m['symbol']
                     break
             
+            # 3. Fallback: If query was clearly a descriptive term (e.g. 'gold') 
+            # and no exact match, just use the first result if it seems relevant
+            if not final_ticker and matches and mapped_ticker:
+                final_ticker = matches[0]['symbol']
+
             if not final_ticker and matches:
                 # Suggest closest matches
-                suggestion_msg = f"❌ Kode `{ticker}` tidak ditemukan, Boss. \n\n"
+                suggestion_msg = f"❌ Kode `{raw_query}` tidak ditemukan secara spesifik, Boss. \n\n"
                 suggestion_msg += f"**Mungkin maksud Boss salah satu dari ini?**\n"
                 for m in matches:
                     suggestion_msg += f"• `!scalping {m['symbol']}` ({m['description']})\n"
@@ -1806,7 +1832,7 @@ async def on_message(message):
                 await message.reply(suggestion_msg)
                 return
             elif not final_ticker and not matches:
-                await message.reply(f"❌ Wah, kode `{ticker}` benar-benar tidak ketemu. Coba cek di website Finnhub atau pakai kode populer Boss!")
+                await message.reply(f"❌ Wah, kode `{raw_query}` benar-benar tidak ketemu. Coba cek di website Finnhub atau pakai kode populer Boss!")
                 return
 
             # Start Session
